@@ -68,8 +68,9 @@ def get_loc_event_ptr(rom: ByteString, loc_id: int) -> int:
 
     loc_data_st = 0x360000
     event_ind_st = loc_data_st + 14*loc_id + 8
-
+    print(hex(event_ind_st))
     loc_script_ind = get_value_from_bytes(rom[event_ind_st:event_ind_st+2])
+    print(hex(loc_script_ind))
 
     event_ptr_st = 0x3CF9F0
 
@@ -124,6 +125,7 @@ class Event:
         ''' Read an event from the specified game location. '''
 
         ptr = get_loc_event_ptr(rom, loc_id)
+        print(hex(ptr))
         return Event.from_rom(rom, ptr)
 
     @staticmethod
@@ -234,9 +236,33 @@ class Event:
         for i in range(self.num_objects):
             print(f"Object {i:02X}")
             print(' '.join(f"{self.get_function_start(i,j):04X}"
-                           for j in range(8)))
-            print(' '.join(f"{self.get_function_start(i,j):04X}"
-                           for j in range(8, 16)))
+                           for j in range(16)))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(8, 16)))
+            
+    def print_human_readable_fn(self):
+        for i in range(self.num_objects):
+            print(f"Object {i:02X}")
+            pos = self.get_object_start(i)
+            end = self.get_object_end(i)
+            indent = "\t"
+            indent_end = 0
+            while pos < end:
+                cmd = get_command(self.data, pos)
+                if pos > indent_end:
+                    indent = "\t" 
+                    indent_end = 0
+                print(indent + str(pos) + " " + str(cmd))
+                if cmd.command == 0x18:
+                    indent = "\t\t"      
+                    indent_end = pos + cmd.args[1]
+                pos += len(cmd)
+            
+            #print(self.get_raw_function(i,0))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(16)))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(8, 16)))
 
     def add_py_string(self, new_string: str) -> int:
         ct_str = ctstrings.CTString.from_str(new_string)
@@ -417,6 +443,11 @@ class Event:
         # If we get here, we didn't find a nonempty function after the given
         # function.  So our function goes to the end of the data.
         return len(self.data)
+    
+    def get_raw_function(self, obj_id: int, func_id: int) -> bytearray:
+        start = self.get_function_start(obj_id, func_id)
+        end = self.get_function_end(obj_id, func_id)
+        return self.data[start:end]
 
     def get_function(self, obj_id: int, func_id: int) -> EF:
         start = self.get_function_start(obj_id, func_id)
