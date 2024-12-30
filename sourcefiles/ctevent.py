@@ -239,7 +239,31 @@ class Event:
                            for j in range(16)))
             # print(' '.join(f"{self.get_function_start(i,j):04X}"
             #                for j in range(8, 16)))
-            
+    
+    def get_commands_for_object(self, i):
+        pos = self.get_object_start(i)
+        end = self.get_object_end(i)
+        commands = []
+        while pos < end:
+            cmd = get_command(self.data, pos)
+            commands.append(cmd)
+            pos += len(cmd)
+        return commands
+    
+    def get_all_commands(self):
+        command_map = {}
+        for i in range(self.num_objects):
+            command_map[i] = self.get_commands_for_object(i)
+        return command_map
+    
+    def get_all_fuctions(self, object: int):
+        functions = []
+        for i in range(16):
+            functions.append(self.get_function(object, i))
+        return functions
+        
+        
+
     def print_human_readable_fn(self):
         for i in range(self.num_objects):
             print(f"Object {i:02X}")
