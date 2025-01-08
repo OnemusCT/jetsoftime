@@ -313,7 +313,7 @@ class Event:
         while pos < end:
             cmd = get_command(self.data, pos)
 
-            if cmd in EC.str_commands:
+            if cmd.command in EC.str_commands:
                 string_indices.add(cmd.args[0])
 
             pos += len(cmd)
@@ -1237,7 +1237,7 @@ class Event:
         del self.data[del_pos:del_pos+cmd_len]
 
     def delete_commands_range(self, del_start_pos: int, del_end_pos: int):
-
+        print("Deleting {:02X}-{:02X}".format(del_start_pos, del_end_pos))
         if del_start_pos > del_end_pos:
             raise ValueError("Start after end.")
 
@@ -1246,6 +1246,7 @@ class Event:
         deleted_length = 0
         while deleted_length < length_to_delete:
             cmd = get_command(self.data, pos)
+            print("Deleting {}".format(cmd))
             self.delete_commands(pos)
             deleted_length += len(cmd)
 

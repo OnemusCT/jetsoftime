@@ -4,7 +4,7 @@ from typing import Tuple
 
 from byteops import to_little_endian, get_value_from_bytes
 from enum import Enum, IntEnum, auto
-from commandgroups import EventCommandType, AssignmentCommandType, AnimationCommandType, BattleCommandType, BitMathCommandType, ByteMathCommandType, ChangeLocationCommandType, CheckButtonCommandType, InventoryCommandType, CheckPartyCommandType, CheckResultCommandType, CheckStorylineCommandType, ComparisonCommandType, EndCommandType, FacingCommandType, GotoCommandType, HpMpCommandType, InventoryCommandType, MemCopyCommandType, Mode7CommandType, ObjectCoordinatesCommandType, ObjectFunctionsCommandType, PaletteCommandType, PauseCommandType, PartyManagementCommandType, RandomNumberCommandType, SceneManipCommandType, SoundCommandType, SpriteCollisionCommandType, SpriteMovementCommandType, SpriteDrawingCommandType, TextCommandType, UnknownCommandType
+from commandgroups import EventCommandType, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype
 
 
 # Small enum to store the synchronization scheme when a function is called
@@ -75,6 +75,8 @@ class EventCommand:
     conditional_commands = [x for x in fwd_jump_commands
                             if x != 0x10]
     jump_commands = fwd_jump_commands + back_jump_commands
+
+    text_commands = [0xBB, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4]
 
     def __init__(self, command, num_args,
                  arg_lens, arg_descs,
@@ -890,6 +892,401 @@ class EventCommand:
 
         num_ticks = int(duration_secs*0x10)
         return EventCommand.generic_one_arg(0xAD, num_ticks)
+    
+    @staticmethod
+    def animation(animation_id: int, type: str = "Static", loops: int = 0):
+        # Handle special cases for animation_id 0 and 1 in Normal mode
+        if type == "Normal" and animation_id == 0:
+            return EventCommand.generic_zero_arg(0xB3)
+        if type == "Normal" and animation_id == 1:
+            return EventCommand.generic_zero_arg(0xB4)
+            
+        # Handle other cases based on type
+        if type == "Static":
+            return EventCommand.generic_one_arg(0xAC, animation_id)
+        elif type == "Normal":
+            return EventCommand.generic_one_arg(0xAB, animation_id)
+        elif type == "Loop":
+            if loops == 0:
+                # Infinite loop
+                return EventCommand.generic_one_arg(0xAA, animation_id)
+            else:
+                # Specific number of loops
+                return EventCommand.generic_two_arg(0xB7, animation_id, loops)
+        else:
+            raise ValueError(f"Invalid animation type: {type}")
+
+    @staticmethod
+    def animation_limiter(limit: int) -> EventCommand:
+        return EventCommand.generic_one_arg(0x47, limit)
+    
+    @staticmethod
+    def random_number(offset: int) -> EventCommand:
+        """Generate a random number and store it to script memory."""
+        if not is_script_mem(offset):
+            raise ValueError('Must store to script memory')
+        return EventCommand.generic_one_arg(0x7F, get_offset(offset))
+
+    @staticmethod 
+    def get_storyline(addr: int) -> EventCommand:
+        """Get storyline counter value into script memory."""
+        if not is_script_mem(addr):
+            raise ValueError('Must store to script memory')
+        return EventCommand.generic_one_arg(0x55, get_offset(addr))
+
+    @staticmethod
+    def get_pc1(offset: int) -> EventCommand:
+        """Get PC1's ID into script memory."""
+        if not is_script_mem(offset):
+            raise ValueError('Must store to script memory')
+        return EventCommand.generic_one_arg(0x20, get_offset(offset))
+
+    @staticmethod
+    def load_ascii(index: int) -> EventCommand:
+        """Load ASCII text from index."""
+        return EventCommand.generic_one_arg(0x29, index | 0x80)
+
+    @staticmethod
+    def change_palette(palette: int) -> EventCommand:
+        """Change the calling object's palette."""
+        return EventCommand.generic_one_arg(0x33, palette)
+
+    @staticmethod
+    def sprite_collision(props: int) -> EventCommand:
+        """Set NPC solidity properties."""
+        return EventCommand.generic_one_arg(0x84, props)
+
+    @staticmethod
+    def equip_item(pc_id: int, item_id: int) -> EventCommand:
+        """Equip an item on a PC."""
+        return EventCommand.generic_two_arg(0xD5, pc_id, item_id)
+
+    @staticmethod
+    def get_item_quantity(item_id: int, store_addr: int) -> EventCommand:
+        """Get quantity of item in inventory to script memory."""
+        if not is_script_mem(store_addr):
+            raise ValueError('Must store to script memory')
+        return EventCommand.generic_two_arg(0xD7, item_id, get_offset(store_addr))
+
+    @staticmethod
+    def check_gold(amount: int, jump_bytes: int) -> EventCommand:
+        """Check if player has enough gold, jump if not enough."""
+        if amount > 0xFFFF:
+            raise ValueError('Gold amount must be <= 0xFFFF')
+        return EventCommand.generic_command(0xCC, amount, jump_bytes)
+
+    @staticmethod
+    def add_gold(amount: int) -> EventCommand:
+        """Add gold to inventory."""
+        if amount > 0xFFFF:  # Using 16-bit limit based on command args
+            raise ValueError('Gold amount must be <= 0xFFFF')
+        return EventCommand.generic_command(0xCD, amount)
+
+    @staticmethod
+    def remove_gold(amount: int) -> EventCommand:
+        """Remove gold from inventory."""
+        if amount > 0xFFFF:
+            raise ValueError('Gold amount must be <= 0xFFFF')
+        return EventCommand.generic_command(0xCE, amount)
+
+    @staticmethod
+    def check_item(item_id: int, jump_bytes: int) -> EventCommand:
+        """Check if item is in inventory, jump if not present."""
+        return EventCommand.generic_two_arg(0xC9, item_id, jump_bytes)
+
+    @staticmethod
+    def add_item(item_id: int) -> EventCommand:
+        """Add item to inventory."""
+        return EventCommand.generic_one_arg(0xCA, item_id)
+
+    @staticmethod
+    def string_index(address: int) -> EventCommand:
+        """Set the string index to given address."""
+        return EventCommand.generic_one_arg(0xB8, address)
+
+    @staticmethod
+    def special_dialog(dialog_id: int) -> EventCommand:
+        """Show special dialog with given ID."""
+        return EventCommand.generic_one_arg(0xC8, dialog_id)
+
+    @staticmethod
+    def rename_character(char_id: int) -> EventCommand:
+        return EventCommand.special_dialog(0xC0 | char_id)
+
+    @staticmethod
+    def replace_characters() -> EventCommand:
+        return EventCommand.special_dialog(0x00)
+
+    @staticmethod
+    def textbox_auto(string_id: int, first_line: int, last_line: int) -> EventCommand:
+        """Show auto-positioned textbox.
+        Args:
+            string_id: ID of string to display
+            first_line: First line (0-3)  
+            last_line: Last line (0-3)
+        """
+        if not (0 <= first_line <= 3 and 0 <= last_line <= 3):
+            raise ValueError('Line numbers must be between 0 and 3')
+        lines_byte = (first_line << 2) | last_line
+        return EventCommand.generic_two_arg(0xC0, string_id, lines_byte)
+
+    @staticmethod
+    def textbox_top(string_id: int) -> EventCommand:
+        """Show textbox at top of screen."""
+        return EventCommand.generic_one_arg(0xC1, string_id)
+
+    @staticmethod
+    def textbox_bottom(string_id: int) -> EventCommand:
+        """Show textbox at bottom of screen."""
+        return EventCommand.generic_one_arg(0xC2, string_id)
+
+    @staticmethod
+    def textbox_auto_top(string_id: int, first_line: int, last_line: int) -> EventCommand:
+        """Show decision box at top."""
+        if not (0 <= first_line <= 3 and 0 <= last_line <= 3):
+            raise ValueError('Line numbers must be between 0 and 3')
+        lines_byte = (first_line << 2) | last_line
+        return EventCommand.generic_two_arg(0xC3, string_id, lines_byte)
+
+    @staticmethod
+    def textbox_auto_bottom(string_id: int, first_line: int, last_line: int) -> EventCommand:
+        """Show decision box at bottom."""
+        if not (0 <= first_line <= 3 and 0 <= last_line <= 3):
+            raise ValueError('Line numbers must be between 0 and 3')
+        lines_byte = (first_line << 2) | last_line
+        return EventCommand.generic_two_arg(0xC4, string_id, lines_byte)
+
+    @staticmethod
+    def personal_textbox(string_id: int) -> EventCommand:
+        """Show personal textbox that closes when leaving."""
+        return EventCommand.generic_one_arg(0xBB, string_id)
+
+    @staticmethod
+    def remove_item(item_id: int) -> EventCommand:
+        """Remove item from inventory."""
+        return EventCommand.generic_one_arg(0xCB, item_id)
+
+    @staticmethod
+    def add_item_from_mem(addr: int) -> EventCommand:
+        """Add item stored in script memory to inventory."""
+        if not is_script_mem(addr):
+            raise ValueError('Must read from script memory')
+        return EventCommand.generic_one_arg(0xC7, get_offset(addr))
+    
+    @staticmethod
+    def get_result(addr: int) -> EventCommand:
+        """Get result value into memory location."""
+        if is_script_mem(addr):
+            return EventCommand.generic_command(0x19, get_offset(addr))
+        else:
+            return EventCommand.generic_command(0x1C, addr - 0x7F0000)
+        
+    @staticmethod
+    def reset_animation() -> EventCommand:
+        return EventCommand.generic_zero_arg(0xAE)
+    
+    @staticmethod 
+    def battle(no_win_pose: bool = False,
+              bottom_menu: bool = False,
+              small_pc_sol: bool = False,
+              unused_108: bool = False,
+              static_enemies: bool = False,
+              special_event: bool = False,
+              unknown_140: bool = False,
+              no_run: bool = False,
+              unknown_201: bool = False,
+              unknown_202: bool = False,
+              unknown_204: bool = False,
+              unknown_208: bool = False,
+              unknown_210: bool = False,
+              no_game_over: bool = False,
+              map_music: bool = False,
+              regroup: bool = False) -> EventCommand:
+        """Create a battle command with specified flags.
+        
+        Each parameter represents a bit flag in the battle command's two bytes.
+        """
+        # First byte flags
+        byte1 = 0
+        if no_win_pose: byte1 |= 0x01
+        if bottom_menu: byte1 |= 0x02
+        if small_pc_sol: byte1 |= 0x04
+        if unused_108: byte1 |= 0x08
+        if static_enemies: byte1 |= 0x10
+        if special_event: byte1 |= 0x20
+        if unknown_140: byte1 |= 0x40
+        if no_run: byte1 |= 0x80
+        
+        # Second byte flags
+        byte2 = 0
+        if unknown_201: byte2 |= 0x01
+        if unknown_202: byte2 |= 0x02
+        if unknown_204: byte2 |= 0x04
+        if unknown_208: byte2 |= 0x08
+        if unknown_210: byte2 |= 0x10
+        if no_game_over: byte2 |= 0x20
+        if map_music: byte2 |= 0x40
+        if regroup: byte2 |= 0x80
+        
+        return EventCommand.generic_command(0xD8, byte1, byte2)
+    
+    @staticmethod
+    def check_button(is_action: bool, button: str, since_last: bool, jump_bytes: int) -> EventCommand:
+        """Create a button check command.
+        
+        Args:
+            is_action: True if checking an action (Dash/Confirm), False if checking a specific button
+            button: The button or action to check ("A", "B", "Dash", etc.)
+            since_last: True to check since last check, False to check current state
+            jump_bytes: Number of bytes to jump if check fails
+            
+        Returns:
+            EventCommand: The appropriate button check command
+        """
+        # Map button/action names to command IDs
+        if is_action:
+            if since_last:
+                cmd_map = {"Dash": 0x3B, "Confirm": 0x3C}
+            else:
+                cmd_map = {"Dash": 0x30, "Confirm": 0x31}
+        else:
+            if since_last:
+                cmd_map = {
+                    "Any": None,  # No "since last" for Any
+                    "A": 0x3F, "B": 0x40, "X": 0x41,
+                    "Y": 0x42, "L": 0x43, "R": 0x44
+                }
+            else:
+                cmd_map = {
+                    "Any": 0x2D,
+                    "A": 0x34, "B": 0x35, "X": 0x36,
+                    "Y": 0x37, "L": 0x38, "R": 0x39
+                }
+                
+        cmd_id = cmd_map.get(button)
+        if cmd_id is None:
+            raise ValueError(f"Invalid button/mode combination: {button} {'since last' if since_last else 'current'}")
+            
+        return EventCommand.generic_one_arg(cmd_id, jump_bytes)
+    
+    @staticmethod
+    def move_sprite(x: int, y: int, animated: bool = False) -> EventCommand:
+        """Move sprite to coordinates with optional animation."""
+        cmd_id = 0xA0 if animated else 0x96
+        return EventCommand.generic_two_arg(cmd_id, x, y)
+
+    @staticmethod
+    def move_sprite_from_mem(x_addr: int, y_addr: int, animated: bool = False) -> EventCommand:
+        """Move sprite to coordinates stored in memory."""
+        if not (is_script_mem(x_addr) and is_script_mem(y_addr)):
+            raise ValueError('Addresses must be in script memory')
+        cmd_id = 0xA1 if animated else 0x97
+        return EventCommand.generic_two_arg(cmd_id, get_offset(x_addr), get_offset(y_addr))
+
+    @staticmethod
+    def move_toward_coord(x: int, y: int, distance: int) -> EventCommand:
+        """Move toward coordinates with given distance."""
+        if not (0 <= x <= 0xFF and 0 <= y <= 0xFF and 0 <= distance <= 0xFF):
+            raise ValueError('Coordinates and distance must be 0-FF')
+        return EventCommand.generic_command(0x9A, x, y, distance)
+
+    @staticmethod
+    def set_movement_properties(through_walls: bool = False, through_pcs: bool = False) -> EventCommand:
+        """Set object movement properties."""
+        flags = 0
+        if through_walls:
+            flags |= 0x01
+        if through_pcs:
+            flags |= 0x02
+        return EventCommand.generic_one_arg(0x0D, flags)
+
+    @staticmethod
+    def set_destination_properties(onto_tile: bool = False, onto_object: bool = False) -> EventCommand:
+        """Set destination properties."""
+        flags = 0
+        if onto_tile:
+            flags |= 0x01
+        if onto_object:
+            flags |= 0x02
+        return EventCommand.generic_one_arg(0x0E, flags)
+
+    @staticmethod
+    def move_toward_object(target_id: int, distance: int, is_pc: bool = False, keep_facing: bool = False) -> EventCommand:
+        """Move toward an object or PC.
+        
+        Args:
+            target_id: Object number (0-FF) or PC number (1-6)
+            distance: Distance to move
+            is_pc: True if target is a PC, False if target is an object
+            keep_facing: True to maintain current facing during movement
+        """
+        if is_pc and not 1 <= target_id <= 6:
+            raise ValueError("PC number must be between 1 and 6")
+        elif not is_pc and not 0 <= target_id <= 0xFF:
+            raise ValueError("Object number must be between 0 and FF")
+            
+        if not 0 <= distance <= 0xFF:
+            raise ValueError("Distance must be between 0 and FF")
+            
+        if is_pc:
+            cmd_id = 0x9F if keep_facing else 0x99
+        else:
+            cmd_id = 0x9E if keep_facing else 0x98
+            
+        return EventCommand.generic_two_arg(cmd_id, target_id, distance)
+
+    @staticmethod
+    def follow_target(target_id: int, is_pc: bool = False, repeat: bool = False) -> EventCommand:
+        """Follow an object or PC.
+        
+        Args:
+            target_id: Object number (0-FF) or PC number (1-6)
+            is_pc: True if target is a PC, False if target is an object
+            repeat: True for continuous following (B5/B6), False for one-time (94/95)
+        """
+        if is_pc:
+            if not 1 <= target_id <= 6:
+                raise ValueError("PC number must be between 1 and 6")
+            cmd_id = 0xB6 if repeat else 0x95
+        else:
+            if not 0 <= target_id <= 0xFF:
+                raise ValueError("Object number must be between 0 and FF")
+            cmd_id = 0xB5 if repeat else 0x94
+            
+        return EventCommand.generic_one_arg(cmd_id, target_id)
+
+    @staticmethod
+    def follow_pc_at_distance(pc_id: int) -> EventCommand:
+        """Follow a PC while maintaining distance.
+        
+        Args:
+            pc_id: PC number (1-6)
+        """
+        if not 1 <= pc_id <= 6:
+            raise ValueError("PC number must be between 1 and 6")
+        return EventCommand.generic_one_arg(0x8F, pc_id)
+
+    @staticmethod
+    def set_speed(speed: int) -> EventCommand:
+        """Set movement speed.
+        
+        Args:
+            speed: Speed value (0-FF)
+        """
+        if not 0 <= speed <= 0xFF:
+            raise ValueError("Speed must be between 0 and FF")
+        return EventCommand.generic_one_arg(0x89, speed)
+
+    @staticmethod
+    def set_speed_from_mem(addr: int) -> EventCommand:
+        """Set speed from memory value.
+        
+        Args:
+            addr: Script memory address containing speed value
+        """
+        if not is_script_mem(addr):
+            raise ValueError("Address must be in script memory")
+        return EventCommand.generic_one_arg(0x8A, get_offset(addr))
 
     def copy(self) -> EventCommand:
         ret_command = EventCommand(-1, 0, [], [], '', '')
@@ -934,14 +1331,14 @@ event_commands[0] = \
                  'Return',
                  'Returns context, but doesn\'t quit',
                  EventCommandType.END,
-                 EndCommandType.END)
+                 EventCommandSubtype.END)
 
 event_commands[1] = \
     EventCommand(1, 0, [], [],
                  'Color Crash',
                  'Crashes.  Presumed leftover debug command.',
                  EventCommandType.UNKNOWN,
-                 UnknownCommandType.COLOR_CRASH)
+                 EventCommandSubtype.COLOR_CRASH)
 
 event_commands[2] = \
     EventCommand(2, 2, [1, 1],
@@ -951,7 +1348,7 @@ event_commands[2] = \
                  'Call Event.  Will wait only if new thread has higher' +
                  'priority, instantly returns if object is dead or busy',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[3] = \
     EventCommand(3, 2, [1, 1],
@@ -962,7 +1359,7 @@ event_commands[3] = \
                  'indefinitely if current thread has lower priority than' +
                  'new one)',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[4] = \
     EventCommand(4, 2, [1, 1],
@@ -971,7 +1368,7 @@ event_commands[4] = \
                  'Call Event',
                  'Call Event. Will wait on execution.',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[5] = \
     EventCommand(5, 2, [1, 1],
@@ -981,7 +1378,7 @@ event_commands[5] = \
                  'Call PC Event. Will wait only if new thread has higher' +
                  'priority, instantly returns if object is dead or busy',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[6] = \
     EventCommand(6, 2, [1, 1],
@@ -992,7 +1389,7 @@ event_commands[6] = \
                  'indefinitely if current thread has lower priority than' +
                  'new one)',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[7] = \
     EventCommand(7, 2, [1, 1],
@@ -1001,21 +1398,21 @@ event_commands[7] = \
                  'Call PC Event',
                  'Call PC Event. Will wait on execution.',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.CALL_OBJ_FUNC)
+                 EventCommandSubtype.CALL_OBJ_FUNC)
 
 event_commands[8] = \
     EventCommand(8, 0, [], [],
                  'Object Deactivation',
                  'Turn off object activate & touch (PC can\'t interact)',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.ACTIVATE)
+                 EventCommandSubtype.ACTIVATE)
 
 event_commands[9] = \
     EventCommand(9, 0, [], [],
                  'Object Activation',
                  'Turn on object activate & touch.)',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.ACTIVATE)
+                 EventCommandSubtype.ACTIVATE)
 
 event_commands[0xA] = \
     EventCommand(0xA, 1, [1],
@@ -1023,7 +1420,7 @@ event_commands[0xA] = \
                  'Remove Object',
                  'Turn off object activate & touch (PC can\'t interact)',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS)
+                 EventCommandSubtype.DRAW_STATUS)
 
 event_commands[0xB] = \
     EventCommand(0xB, 1, [1],
@@ -1031,7 +1428,7 @@ event_commands[0xB] = \
                  'Disable Processing.',
                  'Turn off script processing.',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.SCRIPT_PROCESSING)
+                 EventCommandSubtype.SCRIPT_PROCESSING)
 
 event_commands[0xC] = \
     EventCommand(0xC, 1, [1],
@@ -1039,7 +1436,7 @@ event_commands[0xC] = \
                  'Enable Processing.',
                  'Turn on script processing.',
                  EventCommandType.OBJECT_FUNCTION,
-                 ObjectFunctionsCommandType.SCRIPT_PROCESSING)
+                 EventCommandSubtype.SCRIPT_PROCESSING)
 
 event_commands[0xD] = \
     EventCommand(0xD, 1, [1],
@@ -1047,7 +1444,7 @@ event_commands[0xD] = \
                  'NPC Movement Properties.',
                  'Unknown details.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_MOVEMENT_PROPERTIES)
+                 EventCommandSubtype.OBJECT_MOVEMENT_PROPERTIES)
 
 event_commands[0xE] = \
     EventCommand(0xE, 1, [1],
@@ -1055,7 +1452,7 @@ event_commands[0xE] = \
                  'NPC Positioning.',
                  'Unknown details.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.DESTINATION)
+                 EventCommandSubtype.DESTINATION)
 
 event_commands[0xF] = \
     EventCommand(0xF, 0, [],
@@ -1063,7 +1460,7 @@ event_commands[0xF] = \
                  'Set NPC Facing (up)',
                  'Overlaps A6 . Should be same with a hard coded 00 value.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x10] = \
     EventCommand(0x10, 1, [1],
@@ -1071,7 +1468,7 @@ event_commands[0x10] = \
                  'Jump Forward',
                  'Jumps execution forward.',
                  EventCommandType.GOTO,
-                 GotoCommandType.GOTO)
+                 EventCommandSubtype.GOTO)
 
 event_commands[0x11] = \
     EventCommand(0x11, 1, [1],
@@ -1079,7 +1476,7 @@ event_commands[0x11] = \
                  'Jump Backwards',
                  'Jumps execution backwards.',
                  EventCommandType.GOTO,
-                 GotoCommandType.GOTO)
+                 EventCommandSubtype.GOTO)
 
 event_commands[0x12] = \
     EventCommand(0x12, 4, [1, 1, 1, 1],
@@ -1090,7 +1487,7 @@ event_commands[0x12] = \
                  'If',
                  'Jumps execution if condition evaluates false.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_COMP)
 
 event_commands[0x13] = \
     EventCommand(0x13, 4, [1, 2, 1, 1],
@@ -1101,7 +1498,7 @@ event_commands[0x13] = \
                  'If',
                  'Jumps execution if operation evaluates false.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_COMP)
 
 event_commands[0x14] = \
     EventCommand(0x14, 4, [1, 1, 1, 1],
@@ -1113,7 +1510,7 @@ event_commands[0x14] = \
                  'Jumps execution if operation evaluates false.  ' +
                  'Partial overlap with 0x16.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_COMP)
 
 event_commands[0x15] = \
     EventCommand(0x15, 4, [1, 1, 1, 1],
@@ -1125,7 +1522,7 @@ event_commands[0x15] = \
                  'Jumps execution if operation evaluates false.  ' +
                  'Two byte operand version of 0x14.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_COMP)
 
 event_commands[0x16] = \
     EventCommand(0x16, 4, [1, 1, 1, 1],
@@ -1137,7 +1534,7 @@ event_commands[0x16] = \
                  'Jumps execution if condition evaluates false.  ' +
                  'Two byte operand version of 0x14.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_COMP)
 
 event_commands[0x17] = \
     EventCommand(0x17, 0, [],
@@ -1145,7 +1542,7 @@ event_commands[0x17] = \
                  'Set NPC Facing (down)',
                  'Overlaps A6 . Should be same with a hard coded 01 value.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x18] = \
     EventCommand(0x18, 2, [1, 1],
@@ -1154,7 +1551,7 @@ event_commands[0x18] = \
                  'Check Storyline',
                  'Overlaps A6 . Should be same with a hard coded 00 value.',
                  EventCommandType.CHECK_STORYLINE,
-                 CheckStorylineCommandType.CHECK_STORYLINE)
+                 EventCommandSubtype.CHECK_STORYLINE)
 
 event_commands[0x19] = \
     EventCommand(0x19, 1, [1],
@@ -1162,7 +1559,7 @@ event_commands[0x19] = \
                  'Get Result',
                  'Overlaps 1C . Should be same with a hard coded 00 value.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.RESULT)
+                 EventCommandSubtype.RESULT)
 
 event_commands[0x1A] = \
     EventCommand(0x1A, 2, [1, 1],
@@ -1171,7 +1568,7 @@ event_commands[0x1A] = \
                  'Jump Result',
                  'Jumps if result does not match target.',
                  EventCommandType.CHECK_RESULT,
-                 CheckResultCommandType.CHECK_RESULT)
+                 EventCommandSubtype.CHECK_RESULT)
 
 event_commands[0x1B] = \
     EventCommand(0x1B, 0, [],
@@ -1179,7 +1576,7 @@ event_commands[0x1B] = \
                  'Set NPC Facing (left)',
                  'Overlaps A6 . Should be same with a hard coded 02 value.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x1C] = \
     EventCommand(0x1C, 1, [2],
@@ -1187,7 +1584,7 @@ event_commands[0x1C] = \
                  'Get Result',
                  'Overlapped by 0x19.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.RESULT)
+                 EventCommandSubtype.RESULT)
 
 event_commands[0x1D] = \
     EventCommand(0x1D, 0, [],
@@ -1195,7 +1592,7 @@ event_commands[0x1D] = \
                  'Set NPC Facing (right)',
                  'Overlaps A6 . Should be same with a hard coded 03 value.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x1E] = \
     EventCommand(0x1E, 1, [1],
@@ -1203,7 +1600,7 @@ event_commands[0x1E] = \
                  'Set NPC Facing (up)',
                  'Overlaps A6.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x1F] = \
     EventCommand(0x1F, 1, [1],
@@ -1211,7 +1608,7 @@ event_commands[0x1F] = \
                  'Set NPC Facing (down)',
                  'Overlaps A6.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x20] = \
     EventCommand(0x20, 1, [1],
@@ -1219,7 +1616,7 @@ event_commands[0x20] = \
                  'Get PC1',
                  'Gets PC1 id and stores in memory',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.GET_PC1)
+                 EventCommandSubtype.GET_PC1)
 
 event_commands[0x21] = \
     EventCommand(0x21, 3, [1, 1, 1],
@@ -1229,7 +1626,7 @@ event_commands[0x21] = \
                  'Get Object Coords',
                  'Store object coords to memory.  Overlapped by 0x22.',
                  EventCommandType.OBJECT_COORDINATES,
-                 ObjectCoordinatesCommandType.GET_OBJ_COORD)
+                 EventCommandSubtype.GET_OBJ_COORD)
 
 event_commands[0x22] = \
     EventCommand(0x22, 3, [1, 1, 1],
@@ -1239,7 +1636,7 @@ event_commands[0x22] = \
                  'Get PC Coords',
                  'Store PC coords to memory.  Overlaps 0x21.',
                  EventCommandType.OBJECT_COORDINATES,
-                 ObjectCoordinatesCommandType.GET_OBJ_COORD)
+                 EventCommandSubtype.GET_OBJ_COORD)
 
 event_commands[0x23] = \
     EventCommand(0x23, 2, [1, 1],
@@ -1248,7 +1645,7 @@ event_commands[0x23] = \
                  'Get Obj Facing',
                  'Store object facing to memory.  Overlapped by 0x24.',
                  EventCommandType.FACING,
-                 FacingCommandType.GET_FACING)
+                 EventCommandSubtype.GET_FACING)
 
 event_commands[0x24] = \
     EventCommand(0x24, 2, [1, 1],
@@ -1257,7 +1654,7 @@ event_commands[0x24] = \
                  'Get PC Facing',
                  'Store PC facing to memory.  Overlaps 0x23.',
                  EventCommandType.FACING,
-                 FacingCommandType.GET_FACING)
+                 EventCommandSubtype.GET_FACING)
 
 event_commands[0x25] = \
     EventCommand(0x25, 1, [1],
@@ -1265,7 +1662,7 @@ event_commands[0x25] = \
                  'Set NPC Facing (left)',
                  'Overlaps A6.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x26] = \
     EventCommand(0x26, 1, [1],
@@ -1273,7 +1670,7 @@ event_commands[0x26] = \
                  'Set NPC Facing (right)',
                  'Overlaps A6.',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0x27] = \
     EventCommand(0x27, 2, [1, 1],
@@ -1283,7 +1680,7 @@ event_commands[0x27] = \
                  'Jump when object is not visible' +
                  '(offcreen, not loaded, hidden)',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.CHECK_DRAWN)
+                 EventCommandSubtype.CHECK_DRAWN)
 
 event_commands[0x28] = \
     EventCommand(0x28, 2, [1, 1],
@@ -1292,7 +1689,7 @@ event_commands[0x28] = \
                  'Check Battle Range',
                  'Jump when object is out or range for battle.',
                  EventCommandType.COMPARISON,
-                 ComparisonCommandType.CHECK_IN_BATTLE)
+                 EventCommandSubtype.CHECK_IN_BATTLE)
 
 event_commands[0x29] = \
     EventCommand(0x29, 1, [1],
@@ -1300,7 +1697,7 @@ event_commands[0x29] = \
                  'Load ASCII text',
                  'Loads ASCII text from 0x3DA000',
                  EventCommandType.TEXT,
-                 TextCommandType.LOAD_ASCII)
+                 EventCommandSubtype.LOAD_ASCII)
 
 event_commands[0x2A] = \
     EventCommand(0x2A, 0, [],
@@ -1308,7 +1705,7 @@ event_commands[0x2A] = \
                  'Unknown 0x2A',
                  'Sets 0x04 Bit of 0x7E0154',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.SET_AT)
+                 EventCommandSubtype.SET_AT)
 
 event_commands[0x2B] = \
     EventCommand(0x2B, 0, [],
@@ -1316,7 +1713,7 @@ event_commands[0x2B] = \
                  'Unknown 0x2B',
                  'Sets 0x08 Bit of 0x7E0154',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.SET_AT)
+                 EventCommandSubtype.SET_AT)
 
 event_commands[0x2C] = \
     EventCommand(0x2C, 2, [1, 1],
@@ -1324,7 +1721,7 @@ event_commands[0x2C] = \
                  'Unknown 0x2C',
                  'Unknown',
                  EventCommandType.UNKNOWN,
-                 UnknownCommandType.UNKNOWN)
+                 EventCommandSubtype.UNKNOWN)
 
 event_commands[0x2D] = \
     EventCommand(0x2D, 1, [1],
@@ -1332,7 +1729,7 @@ event_commands[0x2D] = \
                  'Check Button Pressed',
                  'Jumps if no buttons are pressed (0x7E00F8',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x2E] = \
     EventCommand(0x2E, 1, [1],
@@ -1340,7 +1737,7 @@ event_commands[0x2E] = \
                  'Color Math',
                  'No description given.',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.COLOR_MATH)
+                 EventCommandSubtype.COLOR_MATH)
 
 event_commands[0x2F] = \
     EventCommand(0x2F, 2, [1, 1],
@@ -1349,7 +1746,7 @@ event_commands[0x2F] = \
                  'Unknown.  Stores to 0x7E0BE3 and 0x7E0BE4.' +
                  'Appears to have something to do with scrolling layers',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.SCROLL_LAYERS_2F)
+                 EventCommandSubtype.SCROLL_LAYERS_2F)
 
 event_commands[0x30] = \
     EventCommand(0x30, 1, [1],
@@ -1357,7 +1754,7 @@ event_commands[0x30] = \
                  'Jump No Dash',
                  'Jump if dash is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x31] = \
     EventCommand(0x31, 1, [1],
@@ -1365,7 +1762,7 @@ event_commands[0x31] = \
                  'Jump No Confirm',
                  'Jump if confirm button is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x32] = \
     EventCommand(0x32, 0, [],
@@ -1373,7 +1770,7 @@ event_commands[0x32] = \
                  'Unknown 0x32',
                  'Overlaps 0x2A, sets 0x10 Bit of 0x7E0154.',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.SET_AT)
+                 EventCommandSubtype.SET_AT)
 
 event_commands[0x33] = \
     EventCommand(0x33, 1, [1],
@@ -1381,7 +1778,7 @@ event_commands[0x33] = \
                  'Change Palette',
                  'Changes the calling object\'s palette.',
                  EventCommandType.PALETTE,
-                 PaletteCommandType.CHANGE_PALETTE)
+                 EventCommandSubtype.CHANGE_PALETTE)
 
 event_commands[0x34] = \
     EventCommand(0x34, 1, [1],
@@ -1389,7 +1786,7 @@ event_commands[0x34] = \
                  'Jump A Button',
                  'Jump if A is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x35] = \
     EventCommand(0x35, 1, [1],
@@ -1397,7 +1794,7 @@ event_commands[0x35] = \
                  'Jump B Button',
                  'Jump if B is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x36] = \
     EventCommand(0x36, 1, [1],
@@ -1405,7 +1802,7 @@ event_commands[0x36] = \
                  'Jump X Button',
                  'Jump if X is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x37] = \
     EventCommand(0x37, 1, [1],
@@ -1413,7 +1810,7 @@ event_commands[0x37] = \
                  'Jump Y Button',
                  'Jump if Y is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x38] = \
     EventCommand(0x38, 1, [1],
@@ -1421,7 +1818,7 @@ event_commands[0x38] = \
                  'Jump L Button',
                  'Jump if L is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x39] = \
     EventCommand(0x39, 1, [1],
@@ -1429,7 +1826,7 @@ event_commands[0x39] = \
                  'Jump R Button',
                  'Jump if R is not pressed.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x3A] = event_commands[0x01]
 event_commands[0x3A].command = 0x3A
@@ -1441,7 +1838,7 @@ event_commands[0x3B] = \
                  'Jump No Dash',
                  'Jump if dash has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x3C] = \
     EventCommand(0x3C, 1, [1],
@@ -1449,7 +1846,7 @@ event_commands[0x3C] = \
                  'Jump No Confirm',
                  'Jump if confirm has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x3D] = event_commands[0x01]
 event_commands[0x3D].command = 0x3D
@@ -1465,7 +1862,7 @@ event_commands[0x3F] = \
                  'Jump No A',
                  'Jump if A has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x40] = \
     EventCommand(0x40, 1, [1],
@@ -1473,7 +1870,7 @@ event_commands[0x40] = \
                  'Jump No B',
                  'Jump if B has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x41] = \
     EventCommand(0x41, 1, [1],
@@ -1481,7 +1878,7 @@ event_commands[0x41] = \
                  'Jump No X',
                  'Jump if X has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x42] = \
     EventCommand(0x42, 1, [1],
@@ -1489,7 +1886,7 @@ event_commands[0x42] = \
                  'Jump No Y',
                  'Jump if Y has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x43] = \
     EventCommand(0x43, 1, [1],
@@ -1497,7 +1894,7 @@ event_commands[0x43] = \
                  'Jump No L',
                  'Jump if L has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x44] = \
     EventCommand(0x44, 1, [1],
@@ -1505,7 +1902,7 @@ event_commands[0x44] = \
                  'Jump No R',
                  'Jump if R has not been pressed since last check.',
                  EventCommandType.CHECK_BUTTON,
-                 CheckButtonCommandType.CHECK_BUTTON)
+                 EventCommandSubtype.CHECK_BUTTON)
 
 event_commands[0x45] = event_commands[0x01]
 event_commands[0x45].command = 0x45
@@ -1522,7 +1919,7 @@ event_commands[0x47] = \
                  'Limits which animations can be performed.  ' +
                  'Used to avoid slowdown in high activity scenes.',
                  EventCommandType.ANIMATION,
-                 AnimationCommandType.ANIMATION_LIMITER)
+                 EventCommandSubtype.ANIMATION_LIMITER)
 
 event_commands[0x48] = \
     EventCommand(0x48, 2, [3, 1],
@@ -1531,7 +1928,7 @@ event_commands[0x48] = \
                  'Assignment',
                  'Assign from any address to local script memory (1 byte)',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x49] = \
     EventCommand(0x49, 2, [3, 1],
@@ -1540,7 +1937,7 @@ event_commands[0x49] = \
                  'Assignment',
                  'Assign from any address to local script memory (2 bytes)',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x4A] = \
     EventCommand(0x4A, 2, [3, 1],
@@ -1549,7 +1946,7 @@ event_commands[0x4A] = \
                  'Assignment',
                  'Assign value (1 byte) to any memory address.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x4B] = \
     EventCommand(0x4B, 2, [3, 2],
@@ -1558,7 +1955,7 @@ event_commands[0x4B] = \
                  'Assignment',
                  'Assign value (2 byte) to any memory address.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x4C] = \
     EventCommand(0x4C, 2, [3, 1],
@@ -1567,7 +1964,7 @@ event_commands[0x4C] = \
                  'Assignment',
                  'Assign value (1 byte) to local script memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x4D] = \
     EventCommand(0x4D, 2, [3, 1],
@@ -1576,7 +1973,7 @@ event_commands[0x4D] = \
                  'Assignment',
                  'Assign value (2 bytes) to local script memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 # Will need special case in parser
 event_commands[0x4E] = \
@@ -1587,7 +1984,7 @@ event_commands[0x4E] = \
                  'Memory Copy',
                  'Copy data from script to memory',
                  EventCommandType.MEM_COPY,
-                 MemCopyCommandType.MEM_COPY)
+                 EventCommandSubtype.MEM_COPY)
 
 event_commands[0x4F] = \
     EventCommand(0x4F, 2, [1, 1],
@@ -1596,7 +1993,7 @@ event_commands[0x4F] = \
                  'Assignment (Val to Mem)',
                  'Assign value (1 byte) to local script memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x50] = \
     EventCommand(0x50, 2, [2, 1],
@@ -1605,7 +2002,7 @@ event_commands[0x50] = \
                  'Assignment (Val to Mem)',
                  'Assign value (2 bytes) to local script memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x51] = \
     EventCommand(0x51, 2, [1, 1],
@@ -1614,7 +2011,7 @@ event_commands[0x51] = \
                  'Assignment (Mem to Mem)',
                  'Assign local memory to local memory (1 byte).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x52] = \
     EventCommand(0x52, 2, [1, 1],
@@ -1623,7 +2020,7 @@ event_commands[0x52] = \
                  'Assignment (Mem to Mem)',
                  'Assign local memory to local memory (2 bytes).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x53] = \
     EventCommand(0x53, 2, [2, 1],
@@ -1632,7 +2029,7 @@ event_commands[0x53] = \
                  'Assignment (Mem to Mem)',
                  'Assign bank 7F memory to local memory (1 byte).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x54] = \
     EventCommand(0x54, 2, [2, 1],
@@ -1641,7 +2038,7 @@ event_commands[0x54] = \
                  'Assignment (Mem to Mem)',
                  'Assign bank 7F memory to local memory (2 bytes).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x55] = \
     EventCommand(0x55, 1, [1],
@@ -1649,7 +2046,7 @@ event_commands[0x55] = \
                  'Get Storyline Counter',
                  'Assign storyline counter to local memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.GET_STORYLINE)
+                 EventCommandSubtype.GET_STORYLINE)
 
 event_commands[0x56] = \
     EventCommand(0x56, 2, [1, 2],
@@ -1658,7 +2055,7 @@ event_commands[0x56] = \
                  'Assignment (Value to Mem)',
                  'Assign value to bank 7F memory.',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x57] = \
     EventCommand(0x57, 0, [],
@@ -1666,7 +2063,7 @@ event_commands[0x57] = \
                  'Load Crono',
                  'Load Crono if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x58] = \
     EventCommand(0x58, 2, [1, 2],
@@ -1675,7 +2072,7 @@ event_commands[0x58] = \
                  'Assignment (Mem to Mem)',
                  'Assign local memory to bank 7F memory (1 byte).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x59] = \
     EventCommand(0x59, 2, [1, 2],
@@ -1684,7 +2081,7 @@ event_commands[0x59] = \
                  'Assignment (Mem to Mem)',
                  'Assign local memory to bank 7F memory (2 bytes).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_ASSIGN)
 
 event_commands[0x5A] = \
     EventCommand(0x5A, 1, [1],
@@ -1692,7 +2089,7 @@ event_commands[0x5A] = \
                  'Assign Storyline',
                  'Assign value to storyline (0x7F0000)',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.SET_STORYLINE)
+                 EventCommandSubtype.SET_STORYLINE)
 
 event_commands[0x5B] = \
     EventCommand(0x5B, 2, [1, 1],
@@ -1701,7 +2098,7 @@ event_commands[0x5B] = \
                  'Add (Val to Mem)',
                  'Add a value to local memory.',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x5C] = \
     EventCommand(0x5C, 0, [],
@@ -1709,7 +2106,7 @@ event_commands[0x5C] = \
                  'Load Marle',
                  'Load Marle if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x5D] = \
     EventCommand(0x5D, 2, [1, 1],
@@ -1718,7 +2115,7 @@ event_commands[0x5D] = \
                  'Add (Mem to Mem)',
                  'Add from local memory to local memory (1 byte)',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_BYTE)
 
 event_commands[0x5E] = \
     EventCommand(0x5E, 2, [1, 1],
@@ -1727,7 +2124,7 @@ event_commands[0x5E] = \
                  'Add (Mem to Mem)',
                  'Add from local memory to local memory (2 bytes)',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_BYTE)
 
 event_commands[0x5F] = \
     EventCommand(0x5F, 2, [1, 1],
@@ -1736,7 +2133,7 @@ event_commands[0x5F] = \
                  'Subtract (Val to Mem)',
                  'Subtract a value from local memory (1 byte).',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x60] = \
     EventCommand(0x60, 2, [2, 1],
@@ -1745,7 +2142,7 @@ event_commands[0x60] = \
                  'Subtract (Val to Mem)',
                  'Subtract a value from local memory (2 bytes).',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x61] = \
     EventCommand(0x61, 2, [1, 1],
@@ -1754,7 +2151,7 @@ event_commands[0x61] = \
                  'Add (Mem to Mem)',
                  'Subtract local memory from local memory (1 byte?)',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.MEM_TO_MEM)
+                 EventCommandSubtype.MEM_TO_MEM_BYTE)
 
 event_commands[0x62] = \
     EventCommand(0x62, 0, [],
@@ -1762,7 +2159,7 @@ event_commands[0x62] = \
                  'Load Lucca',
                  'Load Lucca if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x63] = \
     EventCommand(0x63, 2, [1, 1],
@@ -1771,7 +2168,7 @@ event_commands[0x63] = \
                  'Set Bit',
                  'Set bit in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x64] = \
     EventCommand(0x64, 2, [1, 1],
@@ -1780,7 +2177,7 @@ event_commands[0x64] = \
                  'Reset Bit',
                  'Reset bit in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x65] = \
     EventCommand(0x65, 2, [1, 1],
@@ -1789,7 +2186,7 @@ event_commands[0x65] = \
                  'Set Bit',
                  'Set bit in bank 7F.  Usually storyline-related.',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x66] = \
     EventCommand(0x66, 2, [1, 1],
@@ -1798,7 +2195,7 @@ event_commands[0x66] = \
                  'Reset Bit',
                  'Reset bit in bank 7F.  Usually storyline-related.',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x67] = \
     EventCommand(0x67, 2, [1, 1],
@@ -1807,7 +2204,7 @@ event_commands[0x67] = \
                  'Reset Bits',
                  'Reset bits in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x68] = \
     EventCommand(0x68, 0, [],
@@ -1815,7 +2212,7 @@ event_commands[0x68] = \
                  'Load Frog',
                  'Load Frog if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x69] = \
     EventCommand(0x69, 2, [1, 1],
@@ -1824,7 +2221,7 @@ event_commands[0x69] = \
                  'Set Bits',
                  'Set bits in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x6A] = \
     EventCommand(0x6A, 0, [],
@@ -1832,7 +2229,7 @@ event_commands[0x6A] = \
                  'Load Robo',
                  'Load Robo if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x6B] = \
     EventCommand(0x6B, 2, [1, 1],
@@ -1841,7 +2238,7 @@ event_commands[0x6B] = \
                  'Toggle Bits',
                  'Toggle bits in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.BIT_MATH)
+                 EventCommandSubtype.BIT_MATH)
 
 event_commands[0x6C] = \
     EventCommand(0x6C, 0, [],
@@ -1849,7 +2246,7 @@ event_commands[0x6C] = \
                  'Load Ayla',
                  'Load Ayla if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x6D] = \
     EventCommand(0x6D, 0, [],
@@ -1857,7 +2254,7 @@ event_commands[0x6D] = \
                  'Load Magus',
                  'Load Magus if in party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x6E] = event_commands[0x01]
 event_commands[0x6E].command = 0x46
@@ -1870,7 +2267,7 @@ event_commands[0x6F] = \
                  'Shift Bits',
                  'Shift bits in local memory',
                  EventCommandType.BIT_MATH,
-                 BitMathCommandType.DOWNSHIFT)
+                 EventCommandSubtype.DOWNSHIFT)
 
 event_commands[0x70] = event_commands[0x01]
 event_commands[0x70].command = 0x70
@@ -1882,7 +2279,7 @@ event_commands[0x71] = \
                  'Increment',
                  'Increment local memory (1 byte).',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x72] = \
     EventCommand(0x72, 1, [1],
@@ -1890,7 +2287,7 @@ event_commands[0x72] = \
                  'Increment',
                  'Increment local memory (2 bytes).',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x73] = \
     EventCommand(0x73, 1, [1],
@@ -1898,7 +2295,7 @@ event_commands[0x73] = \
                  'Decrement',
                  'Decrement local memory (1 byte).',
                  EventCommandType.BYTE_MATH,
-                 ByteMathCommandType.VAL_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_BYTE)
 
 event_commands[0x74] = event_commands[0x01]
 event_commands[0x74].command = 0x74
@@ -1910,7 +2307,7 @@ event_commands[0x75] = \
                  'Set Byte',
                  'Set local memory to 1 (0xFF?) (1 byte).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x76] = \
     EventCommand(0x76, 1, [1],
@@ -1918,7 +2315,7 @@ event_commands[0x76] = \
                  'Set Byte',
                  'Set local memory to 1 (0xFF?) (2 bytes).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x77] = \
     EventCommand(0x77, 1, [1],
@@ -1926,7 +2323,7 @@ event_commands[0x77] = \
                  'Reset Byte',
                  'Reset local memory to 0 (1 byte?).',
                  EventCommandType.ASSIGNMENT,
-                 AssignmentCommandType.VALUE_TO_MEM)
+                 EventCommandSubtype.VAL_TO_MEM_ASSIGN)
 
 event_commands[0x78] = event_commands[0x01]
 event_commands[0x78].command = 0x78
@@ -1944,7 +2341,7 @@ event_commands[0x7A] = \
                  'NPC Jump',
                  'Jump NPC to an unoccupied, walkable spot.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.JUMP)
+                 EventCommandSubtype.JUMP)
 
 event_commands[0x7B] = \
     EventCommand(0x7B, 4, [1, 1, 1, 1],
@@ -1955,7 +2352,7 @@ event_commands[0x7B] = \
                  'NPC Jump',
                  'Unused command related to NPC jumping.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.JUMP_7B)
+                 EventCommandSubtype.JUMP_7B)
 
 event_commands[0x7C] = \
     EventCommand(0x7C, 1, [1],
@@ -1963,7 +2360,7 @@ event_commands[0x7C] = \
                  'Turn Drawing On',
                  'Turn drawing on for the given object.  Overlaps 0x90.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS_FROM_MEM)
+                 EventCommandSubtype.DRAW_STATUS_FROM_MEM)
 
 event_commands[0x7D] = \
     EventCommand(0x7D, 1, [1],
@@ -1971,7 +2368,7 @@ event_commands[0x7D] = \
                  'Turn Drawing Off',
                  'Turn drawing off for the given object.  Overlaps 0x90.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS_FROM_MEM)
+                 EventCommandSubtype.DRAW_STATUS_FROM_MEM)
 
 event_commands[0x7E] = \
     EventCommand(0x7E, 0, [],
@@ -1979,7 +2376,7 @@ event_commands[0x7E] = \
                  'Turn Drawing Off',
                  'Turn drawing off.  Uses value 80.  Overlaps 0x90.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS)
+                 EventCommandSubtype.DRAW_STATUS)
 
 event_commands[0x7F] = \
     EventCommand(0x7F, 1, [1],
@@ -1987,7 +2384,7 @@ event_commands[0x7F] = \
                  'Random',
                  'Load random data into local memory.',
                  EventCommandType.RANDOM_NUM,
-                 RandomNumberCommandType.RANDOM_NUM)
+                 EventCommandSubtype.RANDOM_NUM)
 
 event_commands[0x80] = \
     EventCommand(0x80, 1, [1],
@@ -1995,7 +2392,7 @@ event_commands[0x80] = \
                  'Load PC',
                  'Load PC if the PC is in the party.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x81] = \
     EventCommand(0x81, 1, [1],
@@ -2003,7 +2400,7 @@ event_commands[0x81] = \
                  'Load PC',
                  'Load PC regardless of party status.',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x82] = \
     EventCommand(0x82, 1, [1],
@@ -2011,7 +2408,7 @@ event_commands[0x82] = \
                  'Load NPC',
                  'Load NPC',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x83] = \
     EventCommand(0x83, 2, [1, 1],
@@ -2020,7 +2417,7 @@ event_commands[0x83] = \
                  'Load Enemy',
                  'Load Enemy into given target slot',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.LOAD_SPRITE)
+                 EventCommandSubtype.LOAD_SPRITE)
 
 event_commands[0x84] = \
     EventCommand(0x84, 1, [1],
@@ -2028,7 +2425,7 @@ event_commands[0x84] = \
                  'NPC Solidity',
                  'Alter NPC solidity properties',
                  EventCommandType.SPRITE_COLLISION,
-                 SpriteCollisionCommandType.SPRITE_COLLISION)
+                 EventCommandSubtype.SPRITE_COLLISION)
 
 event_commands[0x85] = event_commands[0x01]
 event_commands[0x85].command = 0x85
@@ -2044,7 +2441,7 @@ event_commands[0x87] = \
                  'Script Speed',
                  'Alter speed of script execution.',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.SCRIPT_SPEED)
+                 EventCommandSubtype.SCRIPT_SPEED)
 
 # Argument number varies depending on mode
 event_commands[0x88] = \
@@ -2053,7 +2450,7 @@ event_commands[0x88] = \
                  'Mem Copy',
                  'Long description in db.',
                  EventCommandType.MEM_COPY,
-                 MemCopyCommandType.MULTI_MODE)
+                 EventCommandSubtype.MULTI_MODE)
 
 event_commands[0x89] = \
     EventCommand(0x89, 1, [1],
@@ -2061,7 +2458,7 @@ event_commands[0x89] = \
                  'NPC Speed',
                  'Alter speed of NPCs.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.SET_SPEED)
+                 EventCommandSubtype.SET_SPEED)
 
 event_commands[0x8A] = \
     EventCommand(0x8A, 1, [1],
@@ -2069,7 +2466,7 @@ event_commands[0x8A] = \
                  'NPC Speed',
                  'Alter speed of NPCs from local memory.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.SET_SPEED_FROM_MEM)
+                 EventCommandSubtype.SET_SPEED_FROM_MEM)
 
 event_commands[0x8B] = \
     EventCommand(0x8B, 2, [1, 1],
@@ -2078,7 +2475,7 @@ event_commands[0x8B] = \
                  'Set Object Position',
                  'Place object at given coordinates.',
                  EventCommandType.OBJECT_COORDINATES,
-                 ObjectCoordinatesCommandType.SET_OBJ_COORD)
+                 EventCommandSubtype.SET_OBJ_COORD)
 
 event_commands[0x8C] = \
     EventCommand(0x8C, 2, [1, 1],
@@ -2087,7 +2484,7 @@ event_commands[0x8C] = \
                  'Set Object Position',
                  'Place object at given coordinates from local memory.',
                  EventCommandType.OBJECT_COORDINATES,
-                 ObjectCoordinatesCommandType.SET_OBJ_COORD_FROM_MEM)
+                 EventCommandSubtype.SET_OBJ_COORD_FROM_MEM)
 
 event_commands[0x8D] = \
     EventCommand(0x8D, 2, [2, 2],
@@ -2096,7 +2493,7 @@ event_commands[0x8D] = \
                  'Set Object Pixel Position',
                  'Place object at given pixel coordinates.',
                  EventCommandType.OBJECT_COORDINATES,
-                 ObjectCoordinatesCommandType.SET_OBJ_COORD)
+                 EventCommandSubtype.SET_OBJ_COORD)
 
 event_commands[0x8E] = \
     EventCommand(0x8E, 1, [1],
@@ -2104,7 +2501,7 @@ event_commands[0x8E] = \
                  'Set Sprite Priority',
                  'Set Sprite Priority',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.SPRITE_PRIORITY)
+                 EventCommandSubtype.SPRITE_PRIORITY)
 
 event_commands[0x8F] = \
     EventCommand(0x8F, 1, [1],
@@ -2112,7 +2509,7 @@ event_commands[0x8F] = \
                  'Follow at Distance',
                  'Follow the given character at a distance.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_FOLLOW)
+                 EventCommandSubtype.OBJECT_FOLLOW)
 
 event_commands[0x90] = \
     EventCommand(0x90, 0, [],
@@ -2120,7 +2517,7 @@ event_commands[0x90] = \
                  'Drawing On',
                  'Turn object drawing on',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS)
+                 EventCommandSubtype.DRAW_STATUS)
 
 event_commands[0x91] = \
     EventCommand(0x91, 0, [],
@@ -2128,7 +2525,7 @@ event_commands[0x91] = \
                  'Drawing On',
                  'Turn object drawing off. Uses value 00 (?). Overlaps 0x90',
                  EventCommandType.SPRITE_DRAWING,
-                 SpriteDrawingCommandType.DRAW_STATUS)
+                 EventCommandSubtype.DRAW_STATUS)
 
 event_commands[0x92] = \
     EventCommand(0x92, 2, [1, 1],
@@ -2137,7 +2534,7 @@ event_commands[0x92] = \
                  'Vector Move',
                  'Move object along given vector.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.VECTOR_MOVE)
+                 EventCommandSubtype.VECTOR_MOVE)
 
 event_commands[0x93] = event_commands[0x01]
 event_commands[0x93].command = 0x93
@@ -2149,7 +2546,7 @@ event_commands[0x94] = \
                  'Follow Object',
                  'Follow the given object.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_FOLLOW)
+                 EventCommandSubtype.OBJECT_FOLLOW)
 
 event_commands[0x95] = \
     EventCommand(0x95, 1, [1],
@@ -2157,7 +2554,7 @@ event_commands[0x95] = \
                  'Follow PC',
                  'Follow the given PC',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_FOLLOW)
+                 EventCommandSubtype.OBJECT_FOLLOW)
 
 event_commands[0x96] = \
     EventCommand(0x96, 2, [1, 1],
@@ -2166,7 +2563,7 @@ event_commands[0x96] = \
                  'NPC move',
                  'Move the given NPC (to given coordinates? vector?)',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_SPRITE)
+                 EventCommandSubtype.MOVE_SPRITE)
 
 event_commands[0x97] = \
     EventCommand(0x97, 2, [1, 1],
@@ -2175,7 +2572,7 @@ event_commands[0x97] = \
                  'NPC move',
                  'Move the given NPC with coordinates from local memory.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_SPRITE_FROM_MEM)
+                 EventCommandSubtype.MOVE_SPRITE_FROM_MEM)
 
 event_commands[0x98] = \
     EventCommand(0x98, 2, [1, 1],
@@ -2184,7 +2581,7 @@ event_commands[0x98] = \
                  'Move Toward',
                  'Move toward the given object.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_TOWARD_OBJ)
+                 EventCommandSubtype.MOVE_TOWARD_OBJ)
 
 event_commands[0x99] = \
     EventCommand(0x99, 2, [1, 1],
@@ -2193,7 +2590,7 @@ event_commands[0x99] = \
                  'Move Toward',
                  'Move toward the given PC. Overlaps 0x98.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_TOWARD_OBJ)
+                 EventCommandSubtype.MOVE_TOWARD_OBJ)
 
 event_commands[0x9A] = \
     EventCommand(0x9A, 3, [1, 1],
@@ -2203,7 +2600,7 @@ event_commands[0x9A] = \
                  'Move Toward Coordinates',
                  'Move toward the given coordinates.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_TOWARD_COORD)
+                 EventCommandSubtype.MOVE_TOWARD_COORD)
 
 event_commands[0x9B] = event_commands[0x01]
 event_commands[0x9B].command = 0x9B
@@ -2216,7 +2613,7 @@ event_commands[0x9C] = \
                  'Vector Move',
                  'Move object along given vector.  Does not change facing.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.VECTOR_MOVE)
+                 EventCommandSubtype.VECTOR_MOVE)
 
 event_commands[0x9D] = \
     EventCommand(0x9D, 2, [1, 1],
@@ -2226,7 +2623,7 @@ event_commands[0x9D] = \
                  'Vector Move',
                  'Move object along given vector.  Does not change facing.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.VECTOR_MOVE_FROM_MEM)
+                 EventCommandSubtype.VECTOR_MOVE_FROM_MEM)
 
 event_commands[0x9E] = \
     EventCommand(0x9D, 1, [1],
@@ -2235,7 +2632,7 @@ event_commands[0x9E] = \
                  'Move to given object. Does not change facing.  ' +
                  'Overlapped by 0x9F',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_TOWARD_OBJ)
+                 EventCommandSubtype.MOVE_TOWARD_OBJ)
 
 event_commands[0x9F] = \
     EventCommand(0x9D, 1, [1],
@@ -2244,7 +2641,7 @@ event_commands[0x9F] = \
                  'Move to given object. Does not change facing.  ' +
                  'Overlaps 0x9E',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_TOWARD_OBJ)
+                 EventCommandSubtype.MOVE_TOWARD_OBJ)
 
 event_commands[0xA0] = \
     EventCommand(0xA0, 2, [1, 1],
@@ -2253,7 +2650,7 @@ event_commands[0xA0] = \
                  'Animated Move',
                  'Move while playing an animation.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_SPRITE)
+                 EventCommandSubtype.MOVE_SPRITE)
 
 event_commands[0xA1] = \
     EventCommand(0xA1, 2, [1, 1],
@@ -2262,7 +2659,7 @@ event_commands[0xA1] = \
                  'Animated Move',
                  'Move while playing an animation.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_SPRITE_FROM_MEM)
+                 EventCommandSubtype.MOVE_SPRITE_FROM_MEM)
 
 event_commands[0xA2] = event_commands[0x01]
 event_commands[0xA2].command = 0xA2
@@ -2286,7 +2683,7 @@ event_commands[0xA6] = \
                  'NPC Facing',
                  'Set NPC facing. Overlapped by 0x17',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING)
+                 EventCommandSubtype.SET_FACING)
 
 event_commands[0xA7] = \
     EventCommand(0xA7, 1, [1],
@@ -2294,7 +2691,7 @@ event_commands[0xA7] = \
                  'NPC Facing',
                  'Set NPC facing. Overlaps 0xA6',
                  EventCommandType.FACING,
-                 FacingCommandType.SET_FACING_FROM_MEM)
+                 EventCommandSubtype.SET_FACING_FROM_MEM)
 
 event_commands[0xA8] = \
     EventCommand(0xA8, 1, [1],
@@ -2302,7 +2699,7 @@ event_commands[0xA8] = \
                  'NPC Facing',
                  'Set NPC to face object. Overlapped by 0xA9.',
                  EventCommandType.FACING,
-                 FacingCommandType.FACE_OBJECT)
+                 EventCommandSubtype.FACE_OBJECT)
 
 event_commands[0xA9] = \
     EventCommand(0xA9, 1, [1],
@@ -2310,7 +2707,7 @@ event_commands[0xA9] = \
                  'NPC Facing',
                  'Set NPC to face PC. Overlaps 0xA9.',
                  EventCommandType.FACING,
-                 FacingCommandType.FACE_OBJECT)
+                 EventCommandSubtype.FACE_OBJECT)
 
 event_commands[0xAA] = \
     EventCommand(0xAA, 1, [1],
@@ -2318,7 +2715,7 @@ event_commands[0xAA] = \
                  'Animation',
                  'Play animation. Loops.', 
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xAB] = \
     EventCommand(0xAB, 1, [1],
@@ -2326,7 +2723,7 @@ event_commands[0xAB] = \
                  'Animation',
                  'Play animation.', 
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xAC] = \
     EventCommand(0xAC, 1, [1],
@@ -2334,7 +2731,7 @@ event_commands[0xAC] = \
                  'Static Animation',
                  'Play static animation.', 
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xAD] = \
     EventCommand(0xAD, 1, [1],
@@ -2342,7 +2739,7 @@ event_commands[0xAD] = \
                  'Pause',
                  'Pause',
                  EventCommandType.PAUSE,
-                 PauseCommandType.PAUSE)
+                 EventCommandSubtype.PAUSE)
 
 event_commands[0xAE] = \
     EventCommand(0xAE, 0, [],
@@ -2350,7 +2747,7 @@ event_commands[0xAE] = \
                  'Reset Animation',
                  'Resets the object\'s animation.',
                  EventCommandType.ANIMATION,
-                 AnimationCommandType.RESET_ANIMATION)
+                 EventCommandSubtype.RESET_ANIMATION)
 
 event_commands[0xAF] = \
     EventCommand(0xAF, 0, [],
@@ -2358,7 +2755,7 @@ event_commands[0xAF] = \
                  'Exploration.',
                  'Allows player to control PCs (single controller check).',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.CONTROLLABLE)
+                 EventCommandSubtype.CONTROLLABLE)
 
 event_commands[0xB0] = \
     EventCommand(0xB0, 0, [],
@@ -2366,7 +2763,7 @@ event_commands[0xB0] = \
                  'Exploration.',
                  'Allows player to control PCs (infinite controller check).',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.CONTROLLABLE)
+                 EventCommandSubtype.CONTROLLABLE)
 
 event_commands[0xB1] = \
     EventCommand(0xB1, 0, [],
@@ -2389,7 +2786,7 @@ event_commands[0xB3] = \
                  'Animation',
                  'Should be equivalent to 0xAA with hardcoded 00',
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xB4] = \
     EventCommand(0xB4, 0, [],
@@ -2397,7 +2794,7 @@ event_commands[0xB4] = \
                  'Animation',
                  'Should be equivalent to 0xAA with hardcoded 01',
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xB5] = \
     EventCommand(0xB5, 1, [1],
@@ -2405,7 +2802,7 @@ event_commands[0xB5] = \
                  'Move to Object',
                  'Loops 0x94.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_FOLLOW)
+                 EventCommandSubtype.OBJECT_FOLLOW)
 
 event_commands[0xB6] = \
     EventCommand(0xB6, 1, [1],
@@ -2413,7 +2810,7 @@ event_commands[0xB6] = \
                  'Move to PC',
                  'Loops 0x95.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.OBJECT_FOLLOW)
+                 EventCommandSubtype.OBJECT_FOLLOW)
 
 event_commands[0xB7] = \
     EventCommand(0xB7, 2, [1, 1],
@@ -2422,7 +2819,7 @@ event_commands[0xB7] = \
                  'Loop Animation',
                  'Play animation some number of times.',
                  EventCommandType.ANIMATION, 
-                 AnimationCommandType.ANIMATION)
+                 EventCommandSubtype.ANIMATION)
 
 event_commands[0xB8] = \
     EventCommand(0xB8, 1, [3],
@@ -2430,7 +2827,7 @@ event_commands[0xB8] = \
                  'String Index',
                  'Sets String Index.',
                  EventCommandType.TEXT,
-                 TextCommandType.STRING_INDEX)
+                 EventCommandSubtype.STRING_INDEX)
 
 event_commands[0xB9] = \
     EventCommand(0xB9, 0, [],
@@ -2438,7 +2835,7 @@ event_commands[0xB9] = \
                  'Pause 1/4',
                  'Pauses 1/4 second.',
                  EventCommandType.PAUSE,
-                 PauseCommandType.PAUSE)
+                 EventCommandSubtype.PAUSE)
 
 event_commands[0xBA] = \
     EventCommand(0xBA, 0, [],
@@ -2446,7 +2843,7 @@ event_commands[0xBA] = \
                  'Pause 1/2',
                  'Pauses 1/2 second.',
                  EventCommandType.PAUSE,
-                 PauseCommandType.PAUSE)
+                 EventCommandSubtype.PAUSE)
 
 event_commands[0xBB] = \
     EventCommand(0xBB, 1, [1],
@@ -2454,7 +2851,7 @@ event_commands[0xBB] = \
                  'Personal Textbox',
                  'Displays textbox.  Closes after leaving.',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xBC] = \
     EventCommand(0xBC, 0, [],
@@ -2462,7 +2859,7 @@ event_commands[0xBC] = \
                  'Pause 1',
                  'Pauses 1 second.',
                  EventCommandType.PAUSE,
-                 PauseCommandType.PAUSE)
+                 EventCommandSubtype.PAUSE)
 
 event_commands[0xBD] = \
     EventCommand(0xBD, 0, [],
@@ -2470,7 +2867,7 @@ event_commands[0xBD] = \
                  'Pause 2',
                  'Pauses 2 seconds.',
                  EventCommandType.PAUSE,
-                 PauseCommandType.PAUSE)
+                 EventCommandSubtype.PAUSE)
 
 event_commands[0xBE] = event_commands[0x01]
 event_commands[0xBE].command = 0xBE
@@ -2488,7 +2885,7 @@ event_commands[0xC0] = \
                  'Dec Box Auto',
                  'Decision box.  Auto top/bottom.  Stores 00 to 7E0130.',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xC1] = \
     EventCommand(0xC1, 1, [1],
@@ -2496,7 +2893,7 @@ event_commands[0xC1] = \
                  'Textbox Top',
                  'Textbox displayed at top of screen.',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xC2] = \
     EventCommand(0xC2, 1, [1],
@@ -2504,7 +2901,7 @@ event_commands[0xC2] = \
                  'Textbox Bottom',
                  'Textbox displayed at bottom of screen.',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xC3] = \
     EventCommand(0xC3, 2, [1, 1],
@@ -2513,7 +2910,7 @@ event_commands[0xC3] = \
                  'Dec Box Auto',
                  'Decision box at top.  Stores 01 to 7E0130. Overlaps 0xC0',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xC4] = \
     EventCommand(0xC4, 2, [1, 1],
@@ -2522,7 +2919,7 @@ event_commands[0xC4] = \
                  'Dec Box Bottom',
                  'Decision box at bottom.  Stores 01 to 7E0130. Overlaps 0xC0',
                  EventCommandType.TEXT,
-                 TextCommandType.TEXTBOX)
+                 EventCommandSubtype.TEXTBOX)
 
 event_commands[0xC5] = event_commands[0x01]
 event_commands[0xC5].command = 0xC5
@@ -2538,7 +2935,7 @@ event_commands[0xC7] = \
                  'Add Item',
                  'Add item stored in local memory to inventory.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.ITEM_FROM_MEM)
+                 EventCommandSubtype.ITEM_FROM_MEM)
 
 event_commands[0xC8] = \
     EventCommand(0xC8, 1, [1],
@@ -2546,7 +2943,7 @@ event_commands[0xC8] = \
                  'Special Dialog',
                  'Special Dialog.',
                  EventCommandType.TEXT,
-                 TextCommandType.SPECIAL_DIALOG)
+                 EventCommandSubtype.SPECIAL_DIALOG)
 
 event_commands[0xC9] = \
     EventCommand(0xC9, 2, [1, 1],
@@ -2555,7 +2952,7 @@ event_commands[0xC9] = \
                  'Check Inventory',
                  'Jump if item not present in inventory.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.CHECK_ITEM)
+                 EventCommandSubtype.CHECK_ITEM)
 
 event_commands[0xCA] = \
     EventCommand(0xCA, 1, [1],
@@ -2563,7 +2960,7 @@ event_commands[0xCA] = \
                  'Add Item',
                  'Add item to inventory.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.ITEM)
+                 EventCommandSubtype.ITEM)
 
 event_commands[0xCB] = \
     EventCommand(0xCB, 1, [1],
@@ -2571,7 +2968,7 @@ event_commands[0xCB] = \
                  'Remove Item',
                  'Remove item from inventory.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.ITEM)
+                 EventCommandSubtype.ITEM)
 
 event_commands[0xCC] = \
     EventCommand(0xCC, 2, [2, 1],
@@ -2580,7 +2977,7 @@ event_commands[0xCC] = \
                  'Check Gold',
                  'Jump if the player does not have enough gold.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.CHECK_GOLD)
+                 EventCommandSubtype.CHECK_GOLD)
 
 event_commands[0xCD] = \
     EventCommand(0xCD, 1, [2],
@@ -2588,7 +2985,7 @@ event_commands[0xCD] = \
                  'Add Gold',
                  'Add Gold.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.ADD_GOLD)
+                 EventCommandSubtype.ADD_GOLD)
 
 event_commands[0xCE] = \
     EventCommand(0xCE, 1, [2],
@@ -2596,7 +2993,7 @@ event_commands[0xCE] = \
                  'Remove Gold',
                  'Remove Gold.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.ADD_GOLD)
+                 EventCommandSubtype.ADD_GOLD)
 
 event_commands[0xCF] = \
     EventCommand(0xCF, 2, [1, 1],
@@ -2605,7 +3002,7 @@ event_commands[0xCF] = \
                  'Check Recruited',
                  'Check if a PC is recruited.',
                  EventCommandType.CHECK_PARTY,
-                 CheckPartyCommandType.CHECK_PARTY)
+                 EventCommandSubtype.CHECK_PARTY)
 
 event_commands[0xD0] = \
     EventCommand(0xD0, 1, [1],
@@ -2613,7 +3010,7 @@ event_commands[0xD0] = \
                  'Add Reserve',
                  'Add PC to the reserve party.',
                  EventCommandType.PARTY_MANAGEMENT,
-                 PartyManagementCommandType.PARTY_MANIP)
+                 EventCommandSubtype.PARTY_MANIP)
 
 event_commands[0xD1] = \
     EventCommand(0xD1, 1, [1],
@@ -2621,7 +3018,7 @@ event_commands[0xD1] = \
                  'Remove PC',
                  'Remove PC (from party? recruited?)',
                  EventCommandType.PARTY_MANAGEMENT,
-                 PartyManagementCommandType.PARTY_MANIP)
+                 EventCommandSubtype.PARTY_MANIP)
 
 event_commands[0xD2] = \
     EventCommand(0xD2, 2, [1, 1],
@@ -2630,7 +3027,7 @@ event_commands[0xD2] = \
                  'Check Active PC',
                  'Jump if PC not active.  May check and load?',
                  EventCommandType.CHECK_PARTY,
-                 CheckPartyCommandType.CHECK_PARTY)
+                 EventCommandSubtype.CHECK_PARTY)
 
 event_commands[0xD3] = \
     EventCommand(0xD3, 1, [1],
@@ -2638,7 +3035,7 @@ event_commands[0xD3] = \
                  'Add PC to Party',
                  'Add PC to Party.',
                  EventCommandType.PARTY_MANAGEMENT,
-                 PartyManagementCommandType.PARTY_MANIP)
+                 EventCommandSubtype.PARTY_MANIP)
 
 event_commands[0xD4] = \
     EventCommand(0xD4, 1, [1],
@@ -2646,7 +3043,7 @@ event_commands[0xD4] = \
                  'Move to Reserve',
                  'Move PC to reserve party.',
                  EventCommandType.PARTY_MANAGEMENT,
-                 PartyManagementCommandType.PARTY_MANIP)
+                 EventCommandSubtype.PARTY_MANIP)
 
 event_commands[0xD5] = \
     EventCommand(0xD5, 2, [1, 1],
@@ -2655,7 +3052,7 @@ event_commands[0xD5] = \
                  'Equip Item',
                  'Equip PC with an item.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.EQUIP)
+                 EventCommandSubtype.EQUIP)
 
 event_commands[0xD6] = \
     EventCommand(0xD6, 1, [1],
@@ -2663,7 +3060,7 @@ event_commands[0xD6] = \
                  'Remove Active PC',
                  'Remove PC from active party.',
                  EventCommandType.PARTY_MANAGEMENT,
-                 PartyManagementCommandType.PARTY_MANIP)
+                 EventCommandSubtype.PARTY_MANIP)
 
 event_commands[0xD7] = \
     EventCommand(0xD7, 2, [1, 1],
@@ -2672,7 +3069,7 @@ event_commands[0xD7] = \
                  'Get Item Quantity',
                  'Get quantity of item in inventory.',
                  EventCommandType.INVENTORY,
-                 InventoryCommandType.EQUIP)
+                 EventCommandSubtype.EQUIP)
 
 event_commands[0xD8] = \
     EventCommand(0xD8, 2, [1, 1],
@@ -2680,7 +3077,7 @@ event_commands[0xD8] = \
                  'Battle',
                  'Battle.',
                  EventCommandType.BATTLE,
-                 BattleCommandType.BATTLE)
+                 EventCommandSubtype.BATTLE)
 
 event_commands[0xD9] = \
     EventCommand(0xD9, 6, [1, 1, 1, 1, 1, 1],
@@ -2693,7 +3090,7 @@ event_commands[0xD9] = \
                  'Move Party',
                  'Move party to specified coordinates.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.MOVE_PARTY)
+                 EventCommandSubtype.MOVE_PARTY)
 
 event_commands[0xDA] = \
     EventCommand(0xDA, 0, [],
@@ -2701,7 +3098,7 @@ event_commands[0xDA] = \
                  'Party Follow',
                  'Makes PC2 and PC3 follow PC1.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.PARTY_FOLLOW)
+                 EventCommandSubtype.PARTY_FOLLOW)
 
 event_commands[0xDB] = event_commands[0x01]
 event_commands[0xDB].command = 0xDB
@@ -2716,7 +3113,7 @@ event_commands[0xDC] = \
                  'Change Location',
                  'Instantly moves party to another location.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xDD] = \
     EventCommand(0xDD, 3, [2, 1, 1],
@@ -2727,7 +3124,7 @@ event_commands[0xDD] = \
                  'Change Location',
                  'Instantly moves party to another location.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xDE] = \
     EventCommand(0xDE, 3, [2, 1, 1],
@@ -2738,7 +3135,7 @@ event_commands[0xDE] = \
                  'Change Location',
                  'Instantly moves party to another location. Overlaps 0xDD.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xDF] = \
     EventCommand(0xDF, 3, [2, 1, 1],
@@ -2749,7 +3146,7 @@ event_commands[0xDF] = \
                  'Change Location',
                  'Instantly moves party to another location. Overlaps 0xE1.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xE0] = \
     EventCommand(0xE0, 3, [2, 1, 1],
@@ -2760,7 +3157,7 @@ event_commands[0xE0] = \
                  'Change Location',
                  'Instantly moves party to another location.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xE1] = \
     EventCommand(0xE1, 3, [2, 1, 1],
@@ -2771,7 +3168,7 @@ event_commands[0xE1] = \
                  'Change Location',
                  'Instantly moves party to another location. Waits vsync.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION)
+                 EventCommandSubtype.CHANGE_LOCATION)
 
 event_commands[0xE2] = \
     EventCommand(0xE2, 4, [1, 1, 1, 1],
@@ -2783,7 +3180,7 @@ event_commands[0xE2] = \
                  'Instantly moves party to another location.  ' +
                  'Uses local memory to get paramters.  See e.g. E1.',
                  EventCommandType.CHANGE_LOCATION,
-                 ChangeLocationCommandType.CHANGE_LOCATION_FROM_MEM)
+                 EventCommandSubtype.CHANGE_LOCATION_FROM_MEM)
 
 event_commands[0xE3] = \
     EventCommand(0xE3, 1, [1],
@@ -2791,7 +3188,7 @@ event_commands[0xE3] = \
                  'Explore Mode',
                  'Set whether the party can freely move.',
                  EventCommandType.SPRITE_MOVEMENT,
-                 SpriteMovementCommandType.EXPLORE_MODE)
+                 EventCommandSubtype.EXPLORE_MODE)
 
 event_commands[0xE4] = \
     EventCommand(0xE4, 7, [1, 1, 1, 1, 1, 1, 1],
@@ -2805,7 +3202,7 @@ event_commands[0xE4] = \
                  'Copy Tiles',
                  'Copies tiles (from data onto map?)',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.COPY_TILES)
+                 EventCommandSubtype.COPY_TILES)
 
 event_commands[0xE5] = \
     EventCommand(0xE5, 7, [1, 1, 1, 1, 1, 1, 1],
@@ -2819,7 +3216,7 @@ event_commands[0xE5] = \
                  'Copy Tiles',
                  'Copies tiles (from data onto map?)',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.COPY_TILES)
+                 EventCommandSubtype.COPY_TILES)
 
 event_commands[0xE6] = \
     EventCommand(0xE6, 3, [2, 1, 1],
@@ -2829,7 +3226,7 @@ event_commands[0xE6] = \
                  'Scroll Layers',
                  'Scroll Layers',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.SCROLL_LAYERS)
+                 EventCommandSubtype.SCROLL_LAYERS)
 
 event_commands[0xE7] = \
     EventCommand(0xE7, 2, [1, 1],
@@ -2838,7 +3235,7 @@ event_commands[0xE7] = \
                  'Scroll Screen',
                  'Scroll Screen',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.SCROLL_SCREEN)
+                 EventCommandSubtype.SCROLL_SCREEN)
 
 event_commands[0xE8] = \
     EventCommand(0xE8, 1, [1],
@@ -2846,7 +3243,7 @@ event_commands[0xE8] = \
                  'Play Sound',
                  'Plays a sound.',
                  EventCommandType.SOUND,
-                 SoundCommandType.SOUND)
+                 EventCommandSubtype.SOUND)
 
 event_commands[0xE9] = event_commands[0x01]
 event_commands[0xE9].command = 0xE9
@@ -2858,7 +3255,7 @@ event_commands[0xEA] = \
                  'Play Song',
                  'Plays a song.',
                  EventCommandType.SOUND,
-                 SoundCommandType.SOUND)
+                 EventCommandSubtype.SOUND)
 
 event_commands[0xEB] = \
     EventCommand(0xEB, 2, [1, 1],
@@ -2867,7 +3264,7 @@ event_commands[0xEB] = \
                  'Change Volume',
                  'Change Volume.',
                  EventCommandType.SOUND,
-                 SoundCommandType.SOUND)
+                 EventCommandSubtype.SOUND)
 
 event_commands[0xEC] = \
     EventCommand(0xEC, 3, [1, 1, 1],
@@ -2877,7 +3274,7 @@ event_commands[0xEC] = \
                  'All Purpose Sound',
                  'All Purpose Sound Command.',
                  EventCommandType.SOUND,
-                 SoundCommandType.SOUND)
+                 EventCommandSubtype.SOUND)
 
 event_commands[0xED] = \
     EventCommand(0xED, 0, [],
@@ -2885,7 +3282,7 @@ event_commands[0xED] = \
                  'Wait for Silence',
                  'Wait for Silence',
                  EventCommandType.SOUND,
-                 SoundCommandType.WAIT_FOR_SILENCE)
+                 EventCommandSubtype.WAIT_FOR_SILENCE)
 
 event_commands[0xEE] = \
     EventCommand(0xEE, 0, [],
@@ -2893,7 +3290,7 @@ event_commands[0xEE] = \
                  'Wait for Song End',
                  'Wait for Song End',
                  EventCommandType.SOUND,
-                 SoundCommandType.WAIT_FOR_SILENCE)
+                 EventCommandSubtype.WAIT_FOR_SILENCE)
 
 event_commands[0xEF] = event_commands[0x01]
 event_commands[0xEF].command = 0xEF
@@ -2905,7 +3302,7 @@ event_commands[0xF0] = \
                  'Darken Screen',
                  'Darken Screen',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.DARKEN)
+                 EventCommandSubtype.DARKEN)
 
 # Variable length
 event_commands[0xF1] = \
@@ -2915,7 +3312,7 @@ event_commands[0xF1] = \
                  'Color Addition',
                  'Color Addition',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.COLOR_ADD)
+                 EventCommandSubtype.COLOR_ADD)
 
 event_commands[0xF2] = \
     EventCommand(0xF2, 0, [],
@@ -2923,7 +3320,7 @@ event_commands[0xF2] = \
                  'Fade Out',
                  'Fade Out',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.FADE_OUT)
+                 EventCommandSubtype.FADE_OUT)
 
 event_commands[0xF3] = \
     EventCommand(0xF3, 0, [],
@@ -2931,7 +3328,7 @@ event_commands[0xF3] = \
                  'Wait for Brighten End',
                  'Wait for brighten end.',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.WAIT_FOR_ADD)
+                 EventCommandSubtype.WAIT_FOR_ADD)
 
 event_commands[0xF4] = \
     EventCommand(0xF4, 1, [1],
@@ -2939,7 +3336,7 @@ event_commands[0xF4] = \
                  'Shake Screen',
                  'Shake screen.',
                  EventCommandType.SCENE_MANIP,
-                 SceneManipCommandType.SHAKE_SCREEN)
+                 EventCommandSubtype.SHAKE_SCREEN)
 
 event_commands[0xF5] = event_commands[0x01]
 event_commands[0xF5].command = 0xF5
@@ -2959,7 +3356,7 @@ event_commands[0xF8] = \
                  'Restore hp/mp.',
                  'Restore hp/mp.',
                  EventCommandType.HP_MP,
-                 HpMpCommandType.RESTORE_HPMP)
+                 EventCommandSubtype.RESTORE_HPMP)
 
 event_commands[0xF9] = \
     EventCommand(0xF9, 0, [],
@@ -2967,7 +3364,7 @@ event_commands[0xF9] = \
                  'Restore hp.',
                  'Restore hp.',
                  EventCommandType.HP_MP,
-                 HpMpCommandType.RESTORE_HPMP)
+                 EventCommandSubtype.RESTORE_HPMP)
 
 event_commands[0xFA] = \
     EventCommand(0xFA, 0, [],
@@ -2975,7 +3372,7 @@ event_commands[0xFA] = \
                  'Restore mp.',
                  'Restore mp.',
                  EventCommandType.HP_MP,
-                 HpMpCommandType.RESTORE_HPMP)
+                 EventCommandSubtype.RESTORE_HPMP)
 
 event_commands[0xFB] = event_commands[0x01]
 event_commands[0xFB].command = 0xFB
@@ -2995,7 +3392,7 @@ event_commands[0xFE] = \
                  'Unknown Geometry',
                  'Something relating to on screen geometry',
                  EventCommandType.MODE7,
-                 Mode7CommandType.DRAW_GEOMETRY)
+                 EventCommandSubtype.DRAW_GEOMETRY)
 
 event_commands[0xFF] = \
     EventCommand(0xFF, 1, [1],
@@ -3003,7 +3400,7 @@ event_commands[0xFF] = \
                  'Mode 7 Scene',
                  'Mode 7 Scene.',
                  EventCommandType.MODE7,
-                 Mode7CommandType.MODE7)
+                 EventCommandSubtype.MODE7)
 
 
 

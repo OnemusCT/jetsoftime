@@ -1,16 +1,22 @@
 from eventcommand import Operation, EventCommand
 from location_data import locations
+from ctstrings import CTString
+import lookups as lu
 
-def command_to_text(command: EventCommand, bytes: int) -> str:
-    command_str = command.to_human_readable_str()
+def command_to_text(command: EventCommand, bytes: int, strings: dict[int, bytearray]) -> str:
     if command.command in _command_to_text:
-        if isinstance(_command_to_text[command.command], str):
-            command_str = _command_to_text[command.command].format(*command.args)
+        if command.command in EventCommand.text_commands:
+            if command.args[0] not in strings:
+                return "ERROR ERROR ERROR ERROR: " + str(command)
+            str_val = CTString.ct_bytes_to_ascii(strings[command.args[0]])
+            return _command_to_text[command.command].format(str_val)
+        elif isinstance(_command_to_text[command.command], str):
+            return _command_to_text[command.command].format(*command.args)
         elif command.command == 0x10 or command.command == 0x11:
-            command_str = _command_to_text[command.command](command.args, bytes)
+            return _command_to_text[command.command](command.args, bytes)
         else:
-            command_str = _command_to_text[command.command](command.args)
-    return command_str
+            return _command_to_text[command.command](command.args)
+    return command.to_human_readable_str()
 
 operations = {
     Operation.EQUALS: "==",
@@ -23,14 +29,25 @@ operations = {
     Operation.BITWISE_OR_NONZERO: "|",
 }
 
+def get_pc(pc: int) -> str:
+    if pc in lu.pcs:
+        return lu.pcs[pc]
+    return str(pc)
+
 def val_to_obj(obj: int) -> int:
     return int(obj/2)
 
-def address_offset(offset: int) -> int:
-    return (offset*2) + 0x7f0200
+def address_offset(offset: int) -> str:
+    addr = offset*2 + 0x7F0200
+    if addr in lu.known_mem_locations:
+        return lu.known_mem_locations[addr]
+    return "0x{:02X}".format(addr)
 
-def local_address_offset(offset: int) -> int:
-    return offset + 0x7f0000
+def local_address_offset(offset: int) -> str:
+    addr = offset + 0x7F0000
+    if addr in lu.known_mem_locations:
+        return lu.known_mem_locations[addr]
+    return "0x{:02X}".format(addr)
 
 
 def operation_to_str(operation: Operation) -> str:
@@ -46,16 +63,16 @@ def hide_obj(args) -> str:
     return "Hide Object(Obj{:02X})".format(val_to_obj(args[0]))
 
 def if_val(args) -> str:
-    return "If(0x{:02X} {} {:02X})".format(address_offset(args[0]), operation_to_str(args[2]), args[1])
+    return "If({} {} {:02X})".format(address_offset(args[0]), operation_to_str(args[2]), args[1])
 
 def if_local_val(args) -> str:
-    return "If(0x{:02X} {} {:02X})".format(local_address_offset(args[0]), operation_to_str(args[2]), args[1])
+    return "If({} {} {:02X})".format(local_address_offset(args[0]), operation_to_str(args[2]), args[1])
 
 def if_address(args) -> str:
-    return "If(0x{:02X} {} {:02X})".format(address_offset(args[0]), operation_to_str(args[2]), args[1])
+    return "If({} {} {:02X})".format(address_offset(args[0]), operation_to_str(args[2]), args[1])
 
 def if_local_address(args) -> str:
-    return "If(0x{:02X} {} 0x{:02X})".format(local_address_offset(args[0]), operation_to_str(args[2]), address_offset(args[1]))
+    return "If({} {} 0x{:02X})".format(local_address_offset(args[0]), operation_to_str(args[2]), address_offset(args[1]))
 
 def if_visible(args) -> str:
     return "If(Obj{} visible)".format(val_to_obj(args[0]))
@@ -64,35 +81,35 @@ def if_battle_range(args) ->str:
     return "If(Obj{} in battle range)".format(val_to_obj(args[0]))
 
 def get_result_7f0200(args) -> str:
-    return "Get Result(0x{:02X})".format(address_offset(args[0]))
+    return "Get Result({})".format(address_offset(args[0]))
 
 def get_result_7f0000(args) ->str:
-    return "Get Result(0x{:02X})".format(0x7f0000 + args[0])
+    return "Get Result({})".format(local_address_offset(args[0]))
 
 def load_pc(args) -> str:
-    return "Load PC1 into 0x{:02X}".format(address_offset(args[0]))
+    return "Load PC1 into {}".format(address_offset(args[0]))
 
 def load_obj_coords(args) -> str:
-    return "Load Obj{} Coords into 0x{:02X},0x{:02X}".format(val_to_obj(args[0]), (args[1]*2)+0x7f0200, (args[2]*2)+0x7f0200)
+    return "Load Obj{} Coords into {},{}".format(val_to_obj(args[0]), address_offset(args[1]), address_offset(args[2]))
 
 def load_pc_coords(args) -> str:
-    return "Load PC{} Coords into 0x{:02X},0x{:02X}".format(val_to_obj(args[0]), (args[1]*2)+0x7f0200, (args[2]*2)+0x7f0200)
+    return "Load PC{} Coords into {},{}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]), address_offset(args[2]))
 
 def load_obj_facing(args) -> str:
-    return "Load Obj{} Facing into 0x{:02X}".format(val_to_obj(args[0]), (args[1]*2)+0x7f0200)
+    return "Load Obj{} Facing into {}".format(val_to_obj(args[0]), address_offset(args[1]))
 
 def load_pc_facing(args) -> str:
-    return "Load PC{} Facing into 0x{:02X}".format(val_to_obj(args[0]), (args[1]*2)+0x7f0200)
+    return "Load PC{} Facing into {}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]))
 
 def assign_local(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(args[1], 0x7f0200 + (args[0]*2))
+    return "Set 0x{:02X} = {}".format(args[0], address_offset(args[1]))
 
 def assign_48(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(0x7f0200 + (args[1]*2), args[0])
+    return "Set {} = 0x{:02X}".format(address_offset(args[1]), args[0])
 
 
 def assign_from_local(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(0x7f0200 + (args[0]*2), args[0])
+    return "Set {} = 0x{:02X}".format(address_offset(args[0]), args[0])
 
 def assign_address(args) -> str:
     return "Set 0x{:02X} = {:02X}".format(args[0], args[1])
@@ -101,33 +118,173 @@ def npc_movement_properties(args) -> str:
     return "NPC Movement Properties(Through Walls: {}, Through PCs: {})".format(bool(args[0] and 1), bool(args[0] and 2))
 
 def assign_val_to_mem(args) -> str:
-    return "Set 0x{:02X} = {:02X}".format(args[1]*2+0x7f0200, args[0])
+    return "Set {} = {:02X}".format(address_offset(args[1]), args[0])
 
 def assign_mem_to_mem(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(args[1]*2+0x7f0200, args[0]*2+0x7f0200)
+    return "Set {} = {}".format(address_offset(args[1]), address_offset(args[0]))
 
 def assign_local_mem_to_mem(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(args[1]*2+0x7f0200, args[0]+0x7f0000)
+    return "Set {} = {}".format(address_offset(args[1]), local_address_offset(args[0]))
 
 def assign_mem_to_local_mem(args) -> str:
-    return "Set 0x{:02X} = 0x{:02X}".format(args[1]+0x7f0000, args[0]*2+0x7f0200)
+    return "Set {} = {}".format(local_address_offset(args[1]), address_offset(args[0]))
 
 def assign_val_to_mem_local(args) -> str:
-    return "Set 0x{:02X} = {:02X}".format(args[1]+0x7f0000, args[0])
+    return "Set {} = 0x{:02X}".format(local_address_offset(args[1]), args[0])
 
 def get_storyline(args) -> str:
-    return "Set 0x{:02X} = Storyline".format(args[0]*2+0x7f0200)
+    return "Set {} = Storyline".format(address_offset(args[0]))
 
 def add_val_to_mem_local(args) -> str:
-    return "0x{:02X} += {:02X}".format(args[1]*2+0x7f0200, args[0])
+    return "{} += 0x{:02X}".format(address_offset(args[1]), args[0])
 
 def add_mem_to_mem(args) -> str:
-    return "0x{:02X} += 0x{:02X}".format(args[1]*2+0x7f0200, args[0]*2+0x7f0200)
+    return "{} += {}".format(address_offset(args[1]), address_offset(args[0]))
 
-def goto_forward(args, curr_bytes):
+def subtract_val(args) -> str:
+    return "{} -= 0x{:02X}".format(address_offset(args[1]), args[0])
+
+def subtract_mem_to_mem(args) -> str:
+    return "{} -= {}".format(address_offset(args[1]), address_offset(args[0]))
+
+def set_bit(args) -> str:
+    return "Set bit {:02X} in {}".format(args[0], address_offset(args[1]))
+
+def reset_bit(args) -> str:
+    return "Reset bit {:02X} in {}".format(args[0], address_offset(args[1]))
+
+def set_local_bit(args) -> str:
+    if args[0] == 0x80:
+        return "Set bit in local memory 0x{:02X}".format(args[1] + 0x100)
+    else:
+        return "Set bit {:02X} in {}".format(args[0], local_address_offset(args[1]))
+
+def reset_local_bit(args) -> str:
+    if args[0] == 0x80:
+        return "Reset bit in local memory 0x{:02X}".format(args[1] + 0x100)
+    else:
+        return "Reset bit {:02X} in {}".format(args[0], local_address_offset(args[1]))
+
+def reset_bits(args) -> str:
+    return "Keep bits {:02X} in {}".format(args[0], address_offset(args[1]))
+
+def set_bits(args) -> str:
+    return "Set bits {:02X} in {}".format(args[0], address_offset(args[1]))
+
+def toggle_bits(args) -> str:
+    return "Toggle bits {:02X} in {}".format(args[0], address_offset(args[1]))
+
+def downshift(args) -> str:
+    return "Downshift {} by {:02X} bits".format(address_offset(args[1]), args[0])
+
+def increment(args) -> str:
+    return "Increment {}".format(address_offset(args[0]))
+
+def increment_word(args) -> str:
+    return "Increment {}".format(address_offset(args[0]))
+
+def decrement(args) -> str:
+    return "Decrement {}".format(address_offset(args[0]))
+
+def set_byte(args) -> str:
+    return "Set {} to 1".format(address_offset(args[0]))
+
+def set_word(args) -> str:
+    return "Set {} to 1".format(address_offset(args[0]))
+
+def reset_byte(args) -> str:
+    return "Set {} to 0".format(address_offset(args[0]))
+
+def npc_jump(args) -> str:
+    return "NPC Jump(x:{}, y:{}, height:{})".format(args[0], args[1], args[2])
+
+def random(args) -> str:
+    return "Store random value in {}".format(address_offset(args[0]))
+
+def load_pc_extended(args) -> str:
+    return "Load PC{:02X} if in party".format(args[0])
+
+def load_pc_forced(args) -> str:
+    return "Load PC{:02X}".format(args[0])
+
+def load_npc(args) -> str:
+    return "Load NPC ({})".format(lu.npcs[args[0]])
+
+def load_enemy(args) -> str:
+    return "Load enemy ({})".format(lu.enemies[args[0]])
+
+def set_npc_solid(args) -> str:
+    properties = []
+    if args[0] & 0x01:
+        properties.append("solid")
+    if args[0] & 0x02:
+        properties.append("through_walls")
+    props_str = ", ".join(properties) if properties else "none"
+    return "Set NPC solidity ({})".format(props_str)
+
+def set_script_timing(args) -> str:
+    if args[0] >= 0x80:
+        return "Pause script processing"
+    else:
+        return "Set script speed to {:02X}".format(args[0])
+
+def set_sprite_priority(args) -> str:
+    mode = "high" if args[0] & 0x80 else "low"
+    priority = (args[0] & 0x30) >> 4
+    return "Set sprite priority (mode:{}, priority:{:X})".format(mode, priority)
+
+def set_npc_speed(args) -> str:
+    return "Speed(0x{:02X})".format(args[0])
+
+def set_npc_speed_from_mem(args) -> str:
+    return "Speed({})".format(address_offset(args[0]))
+
+def set_coord(args) -> str:
+    return "Move to ({},{}, Static)".format(args[0], args[1])
+
+def set_coord_from_mem(args) -> str:
+    return "Move to ({},{}, Static)".format(
+        address_offset(args[0]), 
+        address_offset(args[1])
+    )
+
+def set_pixel_coord(args) -> str:
+    x = args[0] * 16
+    y = args[1] * 16
+    return "Set pixel position ({},{})".format(x, y)
+
+def vector_move(args) -> str:
+    direction = args[0] * (360/256)  # Convert to degrees
+    return "Move in direction {:.1f}° magnitude {:02X}".format(direction, args[1])
+
+def vector_move_from_mem(args) -> str:
+    return "Move using direction from {} magnitude from {}".format(
+        address_offset(args[0]),
+        address_offset(args[1])
+    )
+
+def move_to_coords(args) -> str:
+    return "Move toward ({},{}) distance {:02X}".format(args[0], args[1], args[2])
+
+def if_item(args) -> str:
+    return "If(!has_item({}))".format(lu.items[args[0]]),
+
+def add_item(args) -> str:
+    return "Add {}".format(lu.items[args[0]])
+
+def remove_item(args) -> str:
+    return "Remove {}".format(lu.items[args[0]])
+
+def equip_item(args) -> str:
+    return "Equip {} on PC{:02X}".format(lu.items[args[0]], args[1])
+
+def item_quantity(args) -> str:
+    return "Get {} quantity into 0x{:02X}".format(lu.items[args[0]], args[1])
+
+def goto_forward(args, curr_bytes) -> str:
     return "Goto(0x{:02X})".format(args[-1] + curr_bytes + 1)
 
-def goto_backward(args, curr_bytes):
+def goto_backward(args, curr_bytes) -> str:
     return "Goto(0x{:02X})".format(curr_bytes - args[-1] + 1)
 
 def change_location(args) -> str:
@@ -235,4 +392,122 @@ _command_to_text = {
     #0x5F:
     0xE0: change_location,
     0xE1: change_location,
+    0x5F: subtract_val,
+    #0x60: "0x{:02X} -= {:04X}".format(address_offset(args[2]), args[0:2]),  # Two byte version
+    0x61: subtract_mem_to_mem,
+    0x63: set_bit,
+    0x64: reset_bit,
+    0x65: set_local_bit,   # Not right
+    0x66: reset_local_bit, # Not right
+    0x67: reset_bits,
+    0x69: set_bits,
+    0x6B: toggle_bits,
+    0x6F: downshift,
+    0x71: increment,
+    0x72: increment_word,
+    0x73: decrement,
+    0x75: set_byte,
+    0x76: set_word,
+    0x77: reset_byte,
+    0x7A: npc_jump,
+    0x7F: random,
+    0x80: load_pc_extended,
+    0x81: load_pc_forced,
+    0x82: load_npc,
+    0x83: load_enemy,
+    0x84: set_npc_solid,
+    0x87: set_script_timing,
+    0x88: "Memory copy mode {:02X}",  # Specific mode handling would need game-specific knowledge
+    0x89: set_npc_speed,
+    0x8A: set_npc_speed_from_mem,
+    0x8B: set_coord,
+    0x8C: set_coord_from_mem,
+    0x8D: set_pixel_coord,
+    0x8E: set_sprite_priority,
+    0x8F: "Unknown 8F {:02X}",  # Based on docs this is unknown
+    0x90: "Enable object drawing",
+    0x91: "Disable object drawing",
+    0x92: vector_move,
+    0x94: "Follow object {:02X}",
+    0x95: "Follow PC{:02X}",
+    0x96: set_coord,  # Similar to 8B but specifically for NPC movement
+    0x97: "Move to coords from (0x{:02X},0x{:02X})",
+    0x98: "Move to object {:02X} distance {:02X}",
+    0x99: "Move to PC{:02X} distance {:02X}",
+    0x9A: move_to_coords,
+    0x9C: vector_move,  # Similar to 92 but doesn't change facing
+    0x9D: vector_move_from_mem,
+    0x9E: "Move toward object {:02X}",
+    0x9F: "Move toward PC{:02X}",
+    0xA0: "Move to ({}, {}, Animated)",
+    0xA1: "Move to (0x{:02X}, 0x{:02X}, Animated)",
+    0xA6: "Set NPC facing {:02X}",
+    0xA7: "Set NPC facing from 0x{:02X}",
+    0xA8: "Face object {:02X}",
+    0xA9: "Face PC{:02X}",
+    0xAA: "Play looping animation {:02X}",
+    0xAB: "Play animation {:02X}",
+    0xAC: "Play static animation {:02X}",
+    0xAD: "Pause for {:02X}/16 seconds",
+    0xAE: "Reset animation",
+    0xAF: "Enable exploration (single check)",
+    0xB0: "Enable exploration (continuous check)",
+    0xB1: "Break",
+    0xB2: "End",
+    0xB3: "Play animation 00",
+    0xB4: "Play animation 01",
+    0xB5: "Loop move to object {:02X}",
+    0xB6: "Loop move to PC{:02X}",
+    0xB7: "Play animation {:02X} for {:02X} loops",
+    0xB8: "Set string index to 0x{:06X}",
+    0xB9: "Pause for 1/4 second",
+    0xBA: "Pause for 1/2 second",
+    0xBB: "Textbox({})",
+    0xBC: "Pause for 1 second",
+    0xBD: "Pause for 2 seconds",
+    0xC0: "Textbox({})",
+    0xC1: "Textbox({})",
+    0xC2: "Textbox({})",
+    0xC3: "Textbox({})",
+    0xC4: "Textbox({})",
+    0xC7: "Add item from 0x{:02X}",
+    0xC8: "Display special dialog {:02X}",
+    0xC9: if_item,
+    0xCA: add_item,
+    0xCB: remove_item,
+    0xCC: "If(gold < {:04X})",
+    0xCD: "Add {:04X} gold",
+    0xCE: "Subtract {:04X} gold",
+    0xCF: "If(!has_pc({:02X}))",
+    0xD0: "Add PC{:02X} to reserve",
+    0xD1: "Remove PC{:02X}",
+    0xD2: "If(!has_active_pc({:02X}))",
+    0xD3: "Add PC{:02X} to active party",
+    0xD4: "Move PC{:02X} to reserve",
+    0xD5: equip_item,
+    0xD6: "Remove PC{:02X} from active party",
+    0xD7: item_quantity,
+    0xD8: "Start battle (flags: {:02X} {:02X})",
+    0xD9: "Move party to ({},{}) ({},{}) ({},{})",
+    0xDA: "Enable party follow",
+    0xE3: "Set explore mode {:02X}",
+    0xE4: "Copy tiles ({},{}) to ({},{}) at ({},{}) flags:{:02X}",
+    0xE5: "Copy tiles ({},{}) to ({},{}) at ({},{}) flags:{:02X}",
+    0xE6: "Scroll layers (mask: {:02X})",
+    0xE7: "Scroll screen to ({},{})",
+    0xE8: "Play sound {:02X}",
+    0xEA: "Play song {:02X}",
+    0xEB: "Set music volume to {:02X} at speed {:02X}",
+    0xEC: "Sound command {:02X}",
+    0xED: "Wait for silence",
+    0xEE: "Wait for song end",
+    0xF0: "Darken screen by {:02X}",
+    0xF1: "Brighten screen (color:{:02X})",
+    0xF2: "Fade out screen",
+    0xF4: "Set screen shake {:02X}",
+    0xF8: "Restore HP/MP",
+    0xF9: "Restore HP",
+    0xFA: "Restore MP",
+    0xFE: "Draw geometry",
+    0xFF: "Mode 7 scene {:02X}"
 }

@@ -589,7 +589,7 @@ known_mem_locations = {
     0x7F01EF: "CharacterLock",
     0x7F01FC: "LastBattleStatus",
     0x7F01FD: "KeepCurSong",
-    0x7F0210: "Item",
+    #0x7F0210: "Item",
     0x7E0100: "CurrLocation",
     0x7E0102: "Starting X Coord",
     0x7E0103: "Starting Y Coord",

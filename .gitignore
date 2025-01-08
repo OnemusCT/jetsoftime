@@ -3,3 +3,5 @@ __pycache__
 sourcefiles/Chrono Trigger (U) \[!].smc
 sourcefiles/location_parse.py
 sourcefiles/locations.txt
+sourcefiles/mem_location_parser.py
+sourcefiles/Memory Locations.txt
