@@ -1,7 +1,6 @@
 from eventcommand import Operation, EventCommand
-from location_data import locations
 from ctstrings import CTString
-import lookups as lu
+import editorui.lookups as lu
 
 def command_to_text(command: EventCommand, bytes: int, strings: dict[int, bytearray]) -> str:
     if command.command in _command_to_text:
@@ -288,7 +287,7 @@ def goto_backward(args, curr_bytes) -> str:
     return "Goto(0x{:02X})".format(curr_bytes - args[-1] + 1)
 
 def change_location(args) -> str:
-    for (id, name) in locations:
+    for (id, name) in lu.locations:
         if args[0] == id:
             return "Change Location({}, {},{})".format(name, args[1], args[2])
     return "Change Location({:02X}, {},{})".format(args[0], args[1], args[2])

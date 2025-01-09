@@ -1,29 +1,8 @@
 from __future__ import annotations
 from PyQt6.QtCore import QAbstractItemModel, QModelIndex, Qt, QMimeData
 from eventcommand import EventCommand
-import commandtotext as c2t
-
-class CommandItem:
-    def __init__(self, name, command: EventCommand = None, address: str = None, children: list[CommandItem] | None = None):
-        self.name = name
-        self.command = command
-        self.address = address
-        self.children = children if children is not None else []
-        self.parent = None
-    
-    def add_child(self, child: CommandItem):
-        child.parent = self
-        self.children.append(child)
-    
-    def get_child(self, index: int) -> CommandItem:
-        if index < len(self.children):
-            return self.children[index]
-        return None
-    
-    def add_children(self, children: list[CommandItem]):
-        for c in children:
-            c.parent = self
-            self.children.append(c)
+import editorui.commandtotext as c2t
+from editorui.commanditem import CommandItem
 
 class CommandModel(QAbstractItemModel):
     def __init__(self, root_item: CommandItem, parent=None):
@@ -191,6 +170,7 @@ class CommandModel(QAbstractItemModel):
 
     def update_command(self, item: CommandItem, new_command: EventCommand):
         """Update an item's command and adjust subsequent addresses based on command size change"""
+        print("Updating")
         # Calculate size difference
         old_size = len(item.command) if item.command else 0
         new_size = len(new_command)
@@ -249,6 +229,7 @@ class CommandModel(QAbstractItemModel):
                 
                 self.endInsertRows()
         
+        print("Past the promotion section")
         # Update the command and name
         item.command = new_command
         item.name = c2t.command_to_text(item.command, int(item.address,16), [])
@@ -260,10 +241,11 @@ class CommandModel(QAbstractItemModel):
             [Qt.ItemDataRole.DisplayRole]
         )
         
+        print("Size diff: {}".format(size_diff))
         if size_diff != 0:  # Only update addresses if size changed
             # Get all items that come after this one
+            self.update_jumps_and_conditionals(item, size_diff)
             affected_items = self.get_all_items_after(item)
-            
             # Update their addresses
             for affected_item in affected_items:
                 if affected_item.address:
@@ -288,8 +270,7 @@ class CommandModel(QAbstractItemModel):
                         self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
                         [Qt.ItemDataRole.DisplayRole]
                     )
-            self.update_jumps_and_conditionals(item, size_diff)
-
+            
     def insert_command(self, parent_index: QModelIndex, position: int, command: EventCommand, address: str) -> bool:
         """
         Insert a new command at the specified position.
@@ -519,6 +500,7 @@ class CommandModel(QAbstractItemModel):
             modified_item: The CommandItem that was modified/inserted/deleted
             size_change: The change in size (positive for insertion/expansion, negative for deletion/reduction)
         """
+        print("Updating jumps and conditionals, size diff: {}".format(size_change))
         def get_all_commands(root: CommandItem) -> list[CommandItem]:
             """Get all commands in the tree in depth-first order"""
             commands = []

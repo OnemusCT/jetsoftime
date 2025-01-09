@@ -13,15 +13,18 @@ from PyQt6.QtCore import Qt, pyqtSlot
 
 import ctevent
 from freespace import FSRom
-import location_data
-import commandtotext as c2t
+import editorui.commandtotext as c2t
 from eventcommand import EventCommand, event_commands
-from commandgroups import event_command_groupings, EventCommandType, EventCommandSubtype
-import commandmenus as cm
-from commanditemmodel import CommandModel, CommandItem
-from commandtreeview import CommandTreeView
+from editorui.commandgroups import event_command_groupings, EventCommandType, EventCommandSubtype
+import editorui.menus.commandmenus as cm
+from editorui.commanditemmodel import CommandModel
+from editorui.commandtreeview import CommandTreeView
 from base import basepatch
 from ctrom import CTRom
+from editorui.commanditem import CommandItem
+from editorui.lookups import locations
+from editorui.menus.BaseCommandMenu import BaseCommandMenu
+from editorui.menus.UnassignedMenu import UnassignedMenu
 
 @dataclass
 class ViewerState:
@@ -285,7 +288,7 @@ class EventViewer(QMainWindow):
     def create_location_selector(self):
         """Create the location selection dropdown"""
         self.location_selector = QComboBox()
-        for loc_id, name in location_data.locations:
+        for loc_id, name in locations:
             self.location_selector.addItem(name, loc_id)
         self.location_selector.currentIndexChanged.connect(self.on_location_changed)
 
@@ -315,7 +318,7 @@ class EventViewer(QMainWindow):
         self.command_group_selector.currentIndexChanged.connect(self.on_command_group_changed)
         
         # Command menu
-        self.command_menu = cm.UnassignedMenu()
+        self.command_menu = UnassignedMenu()
         self.command_menu_widget = self.command_menu.command_widget()
         
         # Update/Insert/Delete buttons
@@ -484,7 +487,7 @@ class EventViewer(QMainWindow):
         if command_type in cm.menu_mapping and command_subtype in cm.menu_mapping[command_type]:
             self.update_command_menu(cm.menu_mapping[command_type][command_subtype])
 
-    def update_command_menu(self, new_menu: cm.BaseCommandMenu):
+    def update_command_menu(self, new_menu: BaseCommandMenu):
         """Update the command menu widget"""
         self.command_layout.removeWidget(self.command_menu_widget)
         self.command_menu_widget.setParent(None)

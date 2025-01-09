@@ -4,7 +4,7 @@ from typing import Tuple
 
 from byteops import to_little_endian, get_value_from_bytes
 from enum import Enum, IntEnum, auto
-from commandgroups import EventCommandType, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype, EventCommandSubtype
+from editorui.commandgroups import EventCommandType, EventCommandSubtype
 
 
 # Small enum to store the synchronization scheme when a function is called
