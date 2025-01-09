@@ -4,7 +4,7 @@ from eventcommand import EventCommand
 
 
 class CommandItem:
-    def __init__(self, name, command: EventCommand = None, address: str = None, children: list[CommandItem] | None = None):
+    def __init__(self, name, command: EventCommand = None, address: int = None, children: list[CommandItem] | None = None):
         self.name = name
         self.command = command
         self.address = address

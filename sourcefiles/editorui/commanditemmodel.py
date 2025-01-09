@@ -9,6 +9,37 @@ class CommandModel(QAbstractItemModel):
         super().__init__(parent)
         self._root_item = root_item
 
+    def _update_addresses(self,  modified_item: CommandItem, size_change: int, insertion: bool = False):
+        all_commands = _get_all_commands(self._root_item)
+        # print("Modified address: 0x{:02X}".format(modified_item.address))
+        seen_modified = False
+        for command in all_commands:
+            changed = False
+            if command.address:
+                # print("Checking 0x{:02X} - {}".format(command.address, command.command))
+                if command.address > modified_item.address:
+                    command.address += size_change
+                    changed = True
+                # If there is an insertion there are going to be two commands
+                # with the same address, the original and the newly inserted.
+                # We only want to update the second of the two.
+                elif insertion and command.address == modified_item.address:
+                    if not seen_modified:
+                        seen_modified = True
+                    else: 
+                        command.address += size_change
+                        changed = True
+            if command.command and (command.command.command == 0x10 or command.command.command == 0x11):
+                command.name = c2t.command_to_text(command.command, command.address, [])
+                changed = True
+            if changed:
+                affected_index = self.get_index_for_item(command)
+                self.dataChanged.emit(
+                    self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
+                    self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
+                    [Qt.ItemDataRole.DisplayRole]
+                )
+
     def supportedDropActions(self) -> Qt.DropAction:
         return Qt.DropAction.MoveAction
 
@@ -229,10 +260,9 @@ class CommandModel(QAbstractItemModel):
                 
                 self.endInsertRows()
         
-        print("Past the promotion section")
         # Update the command and name
         item.command = new_command
-        item.name = c2t.command_to_text(item.command, int(item.address,16), [])
+        item.name = c2t.command_to_text(item.command, item.address, [])
         
         # Emit signal for possible command-related display changes
         self.dataChanged.emit(
@@ -241,37 +271,12 @@ class CommandModel(QAbstractItemModel):
             [Qt.ItemDataRole.DisplayRole]
         )
         
-        print("Size diff: {}".format(size_diff))
         if size_diff != 0:  # Only update addresses if size changed
             # Get all items that come after this one
-            self.update_jumps_and_conditionals(item, size_diff)
-            affected_items = self.get_all_items_after(item)
-            # Update their addresses
-            for affected_item in affected_items:
-                if affected_item.address:
-                    old_addr = int(affected_item.address, 16)
-                    new_addr = old_addr + size_diff
-                    affected_item.address = f"0x{new_addr:X}"
-                    
-                    # Get index for affected item and emit change signal
-                    affected_index = self.get_index_for_item(affected_item)
-                    self.dataChanged.emit(
-                        self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                        self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                        [Qt.ItemDataRole.DisplayRole]
-                    )
-                if affected_item.command and affected_item.command.command == 0x10:
-                    print("Attempting to update GOTO")
-                    base_address = int(affected_item.address, 16)
-                    affected_item.name = c2t.command_to_text(affected_item.command, base_address, [])
-                    affected_index = self.get_index_for_item(affected_item)
-                    self.dataChanged.emit(
-                        self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
-                        self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                        [Qt.ItemDataRole.DisplayRole]
-                    )
+            self._update_jump_parameters(item, size_diff)
+            self._update_addresses(item, size_diff)
             
-    def insert_command(self, parent_index: QModelIndex, position: int, command: EventCommand, address: str) -> bool:
+    def insert_command(self, parent_index: QModelIndex, position: int, command: EventCommand, address: int) -> bool:
         """
         Insert a new command at the specified position.
         
@@ -288,7 +293,7 @@ class CommandModel(QAbstractItemModel):
         
         # Create new command item
         new_item = CommandItem(
-            c2t.command_to_text(command, int(address, 16), []),
+            c2t.command_to_text(command, address, []),
             command,
             address
         )
@@ -302,31 +307,11 @@ class CommandModel(QAbstractItemModel):
         
         # Update addresses of all subsequent commands
         command_size = len(command)
-        affected_items = self.get_all_items_after(new_item)
-        
-        for affected_item in affected_items:
-            if affected_item.address:
-                old_addr = int(affected_item.address, 16)
-                new_addr = old_addr + command_size
-                affected_item.address = f"0x{new_addr:X}"
-            if affected_item.command and affected_item.command.command == 0x10:
-                base_address = int(affected_item.address, 16)
-                affected_item.name = c2t.command_to_text(affected_item.command, base_address, [])
+        self._update_jump_parameters(new_item, command_size, True)
+        self._update_addresses(new_item, command_size, True)
         
         # End insertion process
         self.endInsertRows()
-        
-        # Emit change signals for updated addresses
-        for affected_item in affected_items:
-            affected_index = self.get_index_for_item(affected_item)
-            self.dataChanged.emit(
-                self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
-                self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                [Qt.ItemDataRole.DisplayRole]
-            )
-        
-        item = self.index(position, 0, parent_index).internalPointer()
-        self.update_jumps_and_conditionals(item, len(command))
         return True
 
     def delete_command(self, index: QModelIndex) -> bool:
@@ -351,10 +336,10 @@ class CommandModel(QAbstractItemModel):
         command_size = len(item.command) if item.command else 0
         
         # Get items that will need address updates before deleting
-        affected_items = self.get_all_items_after(item)
         
         # Get parent index for beginRemoveRows
         parent_index = self.parent(index)
+        affected_items = self.get_all_items_after(item)
         
         # Handle children of deleted item if it's a conditional command
         if item.command.command in EventCommand.conditional_commands and item.children:
@@ -379,25 +364,8 @@ class CommandModel(QAbstractItemModel):
             self.endRemoveRows()
         
         item = index.internalPointer()
-        self.update_jumps_and_conditionals(item, -command_size)
-        # Update addresses of affected items
-        for affected_item in affected_items:
-            if affected_item.address:
-                old_addr = int(affected_item.address, 16)
-                new_addr = old_addr - command_size
-                affected_item.address = f"0x{new_addr:X}"
-            if affected_item.command and affected_item.command.command in [0x10, 0x11]:
-                base_address = int(affected_item.address, 16)
-                affected_item.name = c2t.command_to_text(affected_item.command, base_address, [])
-        
-        # Emit change signals for updated addresses
-        for affected_item in affected_items:
-            affected_index = self.get_index_for_item(affected_item)
-            self.dataChanged.emit(
-                self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
-                self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                [Qt.ItemDataRole.DisplayRole]
-            )
+        self._update_jump_parameters(item, -command_size)
+        self._update_addresses(item, -command_size)
         return True
 
     def rowCount(self, parent: QModelIndex) -> int:
@@ -422,13 +390,13 @@ class CommandModel(QAbstractItemModel):
             if index.column() == 1:
                 return item.name
             elif index.column() == 0:
-                return item.address if item.address is not None else ""
+                return "0x{:02X}".format(item.address) if item.address is not None else ""
         
         return None
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: Qt.ItemDataRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return ["Name", "Address"][section]
+            return ["Address", "Command"][section]
         return None
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
@@ -491,43 +459,18 @@ class CommandModel(QAbstractItemModel):
         # Tell views we're done
         self.endResetModel()
 
-    def update_jumps_and_conditionals(self, modified_item: CommandItem, size_change: int):
-        """
-        Updates jump commands and conditional command arguments after a command modification.
-        
-        Args:
-            model: The CommandModel instance
-            modified_item: The CommandItem that was modified/inserted/deleted
-            size_change: The change in size (positive for insertion/expansion, negative for deletion/reduction)
-        """
-        print("Updating jumps and conditionals, size diff: {}".format(size_change))
-        def get_all_commands(root: CommandItem) -> list[CommandItem]:
-            """Get all commands in the tree in depth-first order"""
-            commands = []
-            def traverse(item: CommandItem):
-                commands.append(item)
-                for child in item.children:
-                    traverse(child)
-            traverse(root)
-            return commands
-
-        all_commands = get_all_commands(self._root_item)
-        modified_addr = int(modified_item.address, 16)
-
-        # Scenario 1: Update forward jumps (0x10)
+    def _update_jump_parameters(self, modified_item: CommandItem, size_change: int, insertion=False):
+        all_commands = _get_all_commands(self._root_item)
+        seen_modified = False
         for item in all_commands:
             if item.command and item.command.command in EventCommand.fwd_jump_commands:
-                jump_start = int(item.address, 16)
-                jump_target = jump_start + item.command.args[-1]
+                jump_target = item.address + item.command.args[-1]
                 if item.command.command != 0x10:
                     jump_target += len(item.command)
-                print("FWD - Modified addr: {:02X}\nJump Start: {:02X}\nJump Target: {:02X}".format(modified_addr, jump_start, jump_target))
+                #print("FWD - Modified addr: {:02X}\nJump Start: {:02X}\nJump Target: {:02X}".format(modified_item.address, jump_start, jump_target))
                 # If jump crosses over our modified command, adjust it
-                if jump_start < modified_addr and jump_target > modified_addr:
-                    new_jump = item.command.args[-1] + size_change
-                    item.command.args[-1] = new_jump
-                    # Update display text
-                    item.name = c2t.command_to_text(item.command, jump_start, [])
+                if item.address < modified_item.address and jump_target > modified_item.address:
+                    item.command.args[-1] += size_change
                     
                     # Notify model of change
                     item_index = self.get_index_for_item(item)
@@ -536,20 +479,18 @@ class CommandModel(QAbstractItemModel):
                         self.createIndex(item_index.row(), 1, item),
                         [Qt.ItemDataRole.DisplayRole]
                     )
-
-        # Scenario 2: Update backward jumps (0x11)
-        for item in all_commands:
-            if item.command and item.command.command == 0x11:
-                jump_start = int(item.address, 16)
-                jump_target = jump_start - item.command.args[0]
-
-                print("BWD - Modified addr: {:02X}\nJump Start: {:02X}\nJump Target: {:02X}".format(modified_addr, jump_start, jump_target))
+            elif item.command and item.command.command == 0x11:
+                jump_target = item.address - item.command.args[0]
+                address_check = item.address > modified_item.address and jump_target < modified_item.address
+                # If this is an insertion there will be two items with the same address. The 
+                # inserted item and the item that it was inserted before. We only want
+                # to update the address for the item that was already there so we check
+                # to see if this is the second time we've seen the "modified" address.
+                if insertion and seen_modified:
+                    address_check = item.address >= modified_item.address and jump_target < modified_item.address
                 # If jump crosses over our modified command, adjust it
-                if jump_start > modified_addr and jump_target < modified_addr:
-                    new_jump = item.command.args[0] + size_change
-                    item.command.args[0] = new_jump
-                    # Update display text
-                    item.name = c2t.command_to_text(item.command, jump_start, [])
+                if address_check:
+                    item.command.args[0] += size_change
                     
                     # Notify model of change
                     item_index = self.get_index_for_item(item)
@@ -558,3 +499,65 @@ class CommandModel(QAbstractItemModel):
                         self.createIndex(item_index.row(), 1, item),
                         [Qt.ItemDataRole.DisplayRole]
                     )
+            if item.address == modified_item.address:
+                seen_modified = True
+
+def print_command_tree(model: CommandModel):
+    """
+    Print a readable representation of all commands in the model.
+    
+    Args:
+        model: The CommandModel to print
+        output_file: Optional file path to write the output. If None, prints to console.
+    """
+    def _format_command(item: CommandItem) -> str:
+        """Format a single command item into a readable string"""
+        if not item.command:
+            return f"{item.name}"
+            
+        # Get command details
+        cmd_id = item.command.command
+        args = [f"0x{arg:X}" if isinstance(arg, int) else str(arg) 
+               for arg in item.command.args]
+        args_str = ", ".join(args)
+        
+        return f"0x{cmd_id:02X} {item.name} @ 0x{item.address:02X} [{args_str}]"
+
+    def _print_recursive(index: QModelIndex, depth: int, output_lines: list):
+        """Recursively print command items with proper indentation"""
+        if not index.isValid():
+            # Handle root level items
+            for row in range(model.rowCount(QModelIndex())):
+                child_index = model.index(row, 0, QModelIndex())
+                _print_recursive(child_index, depth, output_lines)
+            return
+
+        # Get item at this index
+        item = index.internalPointer()
+        indent = "  " * depth
+        line = indent + _format_command(item)
+        output_lines.append(line)
+        
+        # Process children
+        for row in range(model.rowCount(index)):
+            child_index = model.index(row, 0, index)
+            _print_recursive(child_index, depth + 1, output_lines)
+
+    # Generate all lines
+    output_lines = []
+    _print_recursive(QModelIndex(), 0, output_lines)
+    
+    # Write output
+    for line in output_lines:
+        print(line)
+    print("\n")
+
+def _get_all_commands(root: CommandItem) -> list[CommandItem]:
+    """Get all commands in the tree in depth-first order"""
+    commands = []
+    def traverse(item: CommandItem):
+        commands.append(item)
+        for child in item.children:
+            traverse(child)
+    traverse(root)
+    return commands

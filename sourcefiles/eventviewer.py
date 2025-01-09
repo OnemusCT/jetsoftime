@@ -215,8 +215,8 @@ class EventViewer(QMainWindow):
         # Sort indexes in reverse order to prevent index shifting during deletion
         sorted_indexes = sorted(selected_rows, key=lambda x: x.row(), reverse=True)
         
-        start_address = int(sorted_indexes[-1].internalPointer().address, 16)
-        end_address = int(sorted_indexes[0].internalPointer().address, 16) + len(sorted_indexes[0].internalPointer().command)
+        start_address = sorted_indexes[-1].internalPointer().address 
+        end_address = sorted_indexes[0].internalPointer().address + len(sorted_indexes[0].internalPointer().command)
         self.state.script.delete_commands_range(start_address, end_address)
         # Group indexes by parent to handle multiple deletions correctly
         parent_groups = {}
@@ -267,17 +267,16 @@ class EventViewer(QMainWindow):
         default_command = event_commands[0].copy()
         
         # Calculate address for new command
-        current_addr = int(current_item.address, 16) if current_item.address else 0
+        current_addr = current_item.address  if current_item.address else 0
         new_addr = current_addr + len(current_item.command)
-        addr_str = f"0x{new_addr:X}"
 
-        self.state.script.insert_commands(default_command.to_bytearray(), int(current_item.address, 16))
+        self.state.script.insert_commands(default_command.to_bytearray(), new_addr)
         
         # Get parent index for model
         parent_index = self.model.parent(current_index)
         
         # Insert the new command
-        self.model.insert_command(parent_index, insert_pos, default_command, addr_str)
+        self.model.insert_command(parent_index, insert_pos, default_command, new_addr)
 
         is_match, discrepancies = self.compare_tree_with_script()
         if not is_match:
@@ -632,7 +631,7 @@ def create_command_list(commands, strings, bytes=0):
     while i < len(commands):
         command_str = c2t.command_to_text(commands[i], curr_bytes, strings)
         command_bytes = len(commands[i])
-        item = CommandItem(command_str, commands[i], "0x{:02X}".format(curr_bytes))
+        item = CommandItem(command_str, commands[i], curr_bytes)
         if commands[i].command in EventCommand.conditional_commands:
             bytes_to_jump = commands[i].args[commands[i].num_args-1]
             if bytes_to_jump <= 0: 
