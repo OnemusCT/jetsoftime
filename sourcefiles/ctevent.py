@@ -1200,7 +1200,7 @@ class Event:
 
         pos: Optional[int] = start
         while True:
-            pos = self.find_exact_command_opt(from_cmd)
+            pos = self.find_exact_command_opt(from_cmd, start, end)
 
             if pos is None:
                 break

@@ -21,7 +21,7 @@ from editorui.commanditemmodel import CommandModel
 from editorui.commandtreeview import CommandTreeView
 from base import basepatch
 from ctrom import CTRom
-from editorui.commanditem import CommandItem
+from editorui.commanditem import CommandItem, process_script
 from editorui.lookups import locations
 from editorui.menus.BaseCommandMenu import BaseCommandMenu
 from editorui.menus.UnassignedMenu import UnassignedMenu
@@ -54,7 +54,7 @@ class EventViewer(QMainWindow):
         )
         self.setWindowFlags(Qt.WindowType.Window)
         self.setup_ui()
-        self.load_initial_script()
+        self.on_location_changed(0)
     
     def load_state(self, rom_path: Path):
         rom = CTRom(rom_path.read_bytes(), True)
@@ -66,7 +66,7 @@ class EventViewer(QMainWindow):
             file=rom_path,
             ct_rom=rom
         )
-        self.load_initial_script()
+        self.on_location_changed(0)
 
     def create_menu_bar(self):
         """Create the main menu bar with File and Edit menus"""
@@ -128,16 +128,20 @@ class EventViewer(QMainWindow):
             print("{:02X}".format(self.location_selector.currentData()))
             #self.state.ct_rom.script_manager.set_script(self.state.script, self.location_selector.currentData())
             self.state.ct_rom.script_manager.write_script_to_rom(self.location_selector.currentData())
+            self.state.ct_rom.rom_data.getvalue()
             is_match, discrepancies = self.compare_tree_with_script()
             if not is_match:
                 print("Tree discrepancies found:")
                 for d in discrepancies:
                     print(f"- {d}")
+                print("Save cancelled")
+                return
+            path = Path(filename)
+            path.write_bytes(self.state.ct_rom.rom_data.getvalue())
             #print(f"Selected file: {filename}")
 
     def on_copy(self):
         """Handle Copy menu action"""
-        self.state.ct_rom.script_manager.write_script_to_rom(self.location_selector.currentData())
         is_match, discrepancies = self.compare_tree_with_script()
         if not is_match:
             print("Tree discrepancies found:")
@@ -215,9 +219,6 @@ class EventViewer(QMainWindow):
         # Sort indexes in reverse order to prevent index shifting during deletion
         sorted_indexes = sorted(selected_rows, key=lambda x: x.row(), reverse=True)
         
-        start_address = sorted_indexes[-1].internalPointer().address 
-        end_address = sorted_indexes[0].internalPointer().address + len(sorted_indexes[0].internalPointer().command)
-        self.state.script.delete_commands_range(start_address, end_address)
         # Group indexes by parent to handle multiple deletions correctly
         parent_groups = {}
         for index in sorted_indexes:
@@ -236,6 +237,8 @@ class EventViewer(QMainWindow):
             print("Tree discrepancies found:")
             for d in discrepancies:
                 print(f"- {d}")
+        else:
+            print("No discrepancies found")
             
     def on_insert_pressed(self):
         """Insert a new command after the currently selected one"""
@@ -269,8 +272,6 @@ class EventViewer(QMainWindow):
         # Calculate address for new command
         current_addr = current_item.address  if current_item.address else 0
         new_addr = current_addr + len(current_item.command)
-
-        self.state.script.insert_commands(default_command.to_bytearray(), new_addr)
         
         # Get parent index for model
         parent_index = self.model.parent(current_index)
@@ -299,7 +300,7 @@ class EventViewer(QMainWindow):
         self.tree.setTreePosition(1)
         
         root = CommandItem("Root")
-        self.model = CommandModel(root)
+        self.model = CommandModel(root_item=root, ct_rom=self.state.ct_rom, location_id=0x10F)
         self.tree.setModel(self.model)
         self.tree.selectionModel().selectionChanged.connect(self.on_command_selected)
 
@@ -418,17 +419,18 @@ class EventViewer(QMainWindow):
                 self.update_command_menu(menu)
                 self.command_menu.apply_arguments(item.command.command, item.command.args)
 
-    def load_initial_script(self):
-        """Load the initial script data"""
-        self.update_command_tree(process_script(self.state.script))
-        self.tree.expandAll()
+    # def load_initial_script(self):
+    #     """Load the initial script data"""
+    #     self.update_command_tree(process_script(self.state.script))
+    #     self.tree.expandAll()
 
     @pyqtSlot(int)
     def on_location_changed(self, index: int):
         """Handle location selection changes"""
         location_id = self.location_selector.itemData(index)
-        self.state.script = ctevent.Event.from_rom_location(self.state.rom_data, location_id)
-        self.update_command_tree(process_script(self.state.script))
+        #self.state.script = ctevent.Event.from_rom_location(self.state.rom_data, location_id)
+        #self.update_command_tree(process_script(self.state.script))
+        self.model.change_location(location_id)
         self.tree.expandAll()
 
     def update_command_tree(self, items: list[CommandItem]):
@@ -444,11 +446,6 @@ class EventViewer(QMainWindow):
             return
             
         current_item = self.tree.currentIndex().internalPointer()
-        self.state.script.replace_command(
-            current_item.command, 
-            new_command,
-            self.state.current_address
-        )
         self.model.update_command(current_item, new_command)
         self.tree.viewport().update()
 
@@ -516,7 +513,7 @@ class EventViewer(QMainWindow):
                 f"Length mismatch at {' > '.join(path)}: "
                 f"expected {len(processed_items)}, got {len(current_items)}"
             )
-            #return False
+            return False
         
         is_match = True
         for i, (current, processed) in enumerate(zip(current_items, processed_items)):
@@ -540,9 +537,10 @@ class EventViewer(QMainWindow):
             if current.address != processed.address:
                 discrepancies.append(
                     f"Address mismatch at {' > '.join(current_path)}: "
-                    f"expected {processed.address}, got {current.address}"
+                    f"expected 0x{processed.address:02X}, got 0x{current.address:02X}"
                 )
                 is_match = False
+                return False
             
             # Recursively compare children
             if not self._compare_items(
@@ -584,76 +582,6 @@ class EventViewer(QMainWindow):
         is_match = self._compare_items(current_tree_root.children, processed_items, [], discrepancies)
         
         return is_match, discrepancies
-
-
-def process_script(script: ctevent.Event) -> list[CommandItem]:
-    """Process the script into command items"""
-    result = []
-    for i in range(script.num_objects):
-        object_item = CommandItem(f"Object {i:02X}")
-        obj_strings = script.get_obj_strings(i)
-        
-        for num, function in enumerate(script.get_all_fuctions(i)):
-            func_start = script.get_function_start(i, num)
-            if num > 2 and script.get_function_start(i, num) == script.get_function_start(i, num-1):
-                break
-                
-            func_name = get_function_name(num)
-            func_item = CommandItem(func_name)
-            
-            children, _ = create_command_list(function.commands, obj_strings, func_start)
-            for child in children:
-                child.parent = func_item
-            func_item.add_children(children)
-            
-            func_item.parent = object_item
-            object_item.add_child(func_item)
-            
-        result.append(object_item)
-    return result
-
-def get_function_name(num: int) -> str:
-    """Get the function name based on its number"""
-    if num == 0:
-        return "Startup"
-    elif num == 1:
-        return "Activate" 
-    elif num == 2:
-        return "Touch"
-    else:
-        func_id = num - 3
-        return f"Function {func_id:02X}"
-    
-def create_command_list(commands, strings, bytes=0):
-    items = []
-    i = 0
-    curr_bytes = bytes
-    while i < len(commands):
-        command_str = c2t.command_to_text(commands[i], curr_bytes, strings)
-        command_bytes = len(commands[i])
-        item = CommandItem(command_str, commands[i], curr_bytes)
-        if commands[i].command in EventCommand.conditional_commands:
-            bytes_to_jump = commands[i].args[commands[i].num_args-1]
-            if bytes_to_jump <= 0: 
-                i+=1
-                continue
-            start = i+1
-            while bytes_to_jump > 0:
-                i+=1
-                if i >= len(commands):
-                    break
-                bytes_to_jump -= len(commands[i])
-            end = i
-            (child_items, skipped_bytes) = create_command_list(commands[start:end], strings, curr_bytes+command_bytes)
-            item.add_children(child_items)
-            curr_bytes += skipped_bytes
-            i-=1
-        items.append(item)
-        curr_bytes += command_bytes
-        i+=1
-
-    return (items, curr_bytes-bytes)
-
 
 def main():
     app = QApplication(sys.argv)

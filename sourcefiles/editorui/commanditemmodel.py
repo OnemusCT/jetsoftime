@@ -2,206 +2,23 @@ from __future__ import annotations
 from PyQt6.QtCore import QAbstractItemModel, QModelIndex, Qt, QMimeData
 from eventcommand import EventCommand
 import editorui.commandtotext as c2t
-from editorui.commanditem import CommandItem
+from editorui.commanditem import CommandItem, process_script
+from ctrom import CTRom
 
 class CommandModel(QAbstractItemModel):
-    def __init__(self, root_item: CommandItem, parent=None):
+    def __init__(self, root_item: CommandItem, parent=None, ct_rom: CTRom=None, location_id: int=None):
         super().__init__(parent)
         self._root_item = root_item
+        self._ct_rom = ct_rom
+        self._location_id = location_id
 
-    def _update_addresses(self,  modified_item: CommandItem, size_change: int, insertion: bool = False):
-        all_commands = _get_all_commands(self._root_item)
-        # print("Modified address: 0x{:02X}".format(modified_item.address))
-        seen_modified = False
-        for command in all_commands:
-            changed = False
-            if command.address:
-                # print("Checking 0x{:02X} - {}".format(command.address, command.command))
-                if command.address > modified_item.address:
-                    command.address += size_change
-                    changed = True
-                # If there is an insertion there are going to be two commands
-                # with the same address, the original and the newly inserted.
-                # We only want to update the second of the two.
-                elif insertion and command.address == modified_item.address:
-                    if not seen_modified:
-                        seen_modified = True
-                    else: 
-                        command.address += size_change
-                        changed = True
-            if command.command and (command.command.command == 0x10 or command.command.command == 0x11):
-                command.name = c2t.command_to_text(command.command, command.address, [])
-                changed = True
-            if changed:
-                affected_index = self.get_index_for_item(command)
-                self.dataChanged.emit(
-                    self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
-                    self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
-                    [Qt.ItemDataRole.DisplayRole]
-                )
-
-    def supportedDropActions(self) -> Qt.DropAction:
-        return Qt.DropAction.MoveAction
-
-    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
-        default_flags = super().flags(index)
-        if index.isValid():
-            return default_flags | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
-        return default_flags | Qt.ItemFlag.ItemIsDropEnabled
-
-    def mimeTypes(self) -> list[str]:
-        return ['application/x-commanditem']
-
-    def mimeData(self, indexes: list[QModelIndex]) -> QMimeData:
-        mime_data = QMimeData()
-        encoded_data = bytearray()
-        
-        # Store the row and parent information for each index
-        selected_items = []
-        for index in indexes:
-            if index.column() == 0:  # Only process first column
-                item = index.internalPointer()
-                selected_items.append(item)
-        
-        # Store the selected items in mime data
-        mime_data.setData('application/x-commanditem', bytes(str(id(selected_items)), 'utf-8'))
-        # Store the actual items in a class variable for access during drop
-        self._drag_items = selected_items
-        return mime_data
-
-    def canDropMimeData(self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: QModelIndex) -> bool:
-        if not data.hasFormat('application/x-commanditem'):
-            return False
-            
-        if not hasattr(self, '_drag_items'):
-            return False
-            
-        # Get target item
-        target_item = parent.internalPointer() if parent.isValid() else self._root
-        
-        # Check if any dragged item is an ancestor of the target
-        for item in self._drag_items:
-            current = target_item
-            while current is not None:
-                if current == item:
-                    print("Error: Cannot drop an item onto its own descendant")
-                    return False
-                current = current.parent
-                
-        return True
-
-    def dropMimeData(self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: QModelIndex) -> bool:
-        if not self.canDropMimeData(data, action, row, column, parent):
-            return False
-
-        if action == Qt.DropAction.IgnoreAction:
-            return True
-
-        # Get target item and dragged items
-        target_item = parent.internalPointer() if parent.isValid() else self._root_item
-        
-        # Remove items from their current positions
-        items_to_move = []
-        for item in self._drag_items:
-            if item.parent:
-                old_parent = item.parent
-                old_row = old_parent.children.index(item)
-                self.beginRemoveRows(self.createIndex(0, 0, old_parent), old_row, old_row)
-                old_parent.children.remove(item)
-                self.endRemoveRows()
-                items_to_move.append(item)
-
-        # Determine insert position and parent
-        if target_item.children and target_item.command and target_item.command.command in EventCommand.conditional_commands:
-            # Case 1: Dropping onto a conditional command - insert at beginning of its children
-            target_parent = target_item
-            insert_pos = 0
-        else:
-            # Case 2: Dropping after a command - insert after it in its parent
-            target_parent = target_item.parent if target_item.parent else self._root_item
-            insert_pos = target_parent.children.index(target_item) + 1
-
-        # Insert items at new position
-        self.beginInsertRows(self.get_index_for_item(target_parent), 
-                           insert_pos, 
-                           insert_pos + len(items_to_move) - 1)
-        
-        for item in items_to_move:
-            item.parent = target_parent
-            target_parent.children.insert(insert_pos, item)
-            insert_pos += 1
-            
-        self.endInsertRows()
-        return True
-
-    def get_all_items_after(self, start_item: CommandItem) -> list[CommandItem]:
-        """Get all items that come after the given item in a depth-first traversal of the entire tree"""
-        items = []
-        found_start = False
-        
-        def traverse(item: CommandItem):
-            nonlocal found_start, items
-            
-            # Check if this is the start item
-            if item == start_item:
-                found_start = True
-                return
-                
-            # If we've found the start item, add this item to our list
-            if found_start:
-                items.append(item)
-                
-            # Continue traversing children
-            for child in item.children:
-                traverse(child)
-        
-        def traverse_from_root():
-            nonlocal found_start, items  # Add nonlocal declaration here
-            
-            # Start with root's children
-            for root_child in self._root_item.children:
-                # If we've found our start item, add all subsequent items
-                if found_start:
-                    items.append(root_child)
-                    # Add all descendants of this item
-                    for child in root_child.children:
-                        traverse(child)
-                else:
-                    # If this is our start item, mark it and continue to next sibling
-                    if root_child == start_item:
-                        found_start = True
-                        continue
-                        
-                    # Haven't found start item yet, traverse this subtree
-                    traverse(root_child)
-        
-        # Start the traversal
-        traverse_from_root()
-        return items
-
-    def _collect_all_children(self, item: CommandItem, items: list[CommandItem]):
-        """Helper method to collect all children of an item"""
-        for child in item.children:
-            items.append(child)
-            self._collect_all_children(child, items)
-
-    def get_index_for_item(self, item: CommandItem) -> QModelIndex:
-        """Find the model index for a given item"""
-        if item == self._root_item or item is None:
-            return QModelIndex()
-            
-        if item.parent == self._root_item:
-            row = self._root_item.children.index(item)
-            return self.createIndex(row, 0, item)
-        else:
-            parent = item.parent
-            row = parent.children.index(item)
-            parent_index = self.get_index_for_item(parent)
-            return self.index(row, 0, parent_index)
 
     def update_command(self, item: CommandItem, new_command: EventCommand):
         """Update an item's command and adjust subsequent addresses based on command size change"""
         print("Updating")
+        if self._ct_rom is not None:
+            script = self._ct_rom.script_manager.get_script(self._location_id)
+            script.replace_command(item.command, new_command, item.address, item.address + len(item.command))
         # Calculate size difference
         old_size = len(item.command) if item.command else 0
         new_size = len(new_command)
@@ -289,6 +106,9 @@ class CommandModel(QAbstractItemModel):
         Returns:
             bool: True if insertion was successful
         """
+        if self._ct_rom is not None:
+            script = self._ct_rom.script_manager.get_script(self._location_id)
+            script.insert_commands(command.to_bytearray(), address)
         parent_item = self._root_item if not parent_index.isValid() else parent_index.internalPointer()
         
         # Create new command item
@@ -331,6 +151,10 @@ class CommandModel(QAbstractItemModel):
         parent_item = item.parent
         if parent_item is None:
             return False
+        
+        if self._ct_rom is not None:
+            script = self._ct_rom.script_manager.get_script(self._location_id)
+            script.delete_commands(index.internalPointer().address)
             
         # Get size of command being deleted for address adjustment
         command_size = len(item.command) if item.command else 0
@@ -339,7 +163,6 @@ class CommandModel(QAbstractItemModel):
         
         # Get parent index for beginRemoveRows
         parent_index = self.parent(index)
-        affected_items = self.get_all_items_after(item)
         
         # Handle children of deleted item if it's a conditional command
         if item.command.command in EventCommand.conditional_commands and item.children:
@@ -367,6 +190,191 @@ class CommandModel(QAbstractItemModel):
         self._update_jump_parameters(item, -command_size)
         self._update_addresses(item, -command_size)
         return True
+
+    def _update_addresses(self,  modified_item: CommandItem, size_change: int, insertion: bool = False):
+        all_commands = _get_all_commands(self._root_item)
+        # print("Modified address: 0x{:02X}".format(modified_item.address))
+        seen_modified = False
+        for command in all_commands:
+            changed = False
+            if command.address:
+                # print("Checking 0x{:02X} - {}".format(command.address, command.command))
+                if command.address > modified_item.address:
+                    command.address += size_change
+                    changed = True
+                # If there is an insertion there are going to be two commands
+                # with the same address, the original and the newly inserted.
+                # We only want to update the second of the two.
+                elif insertion and command.address == modified_item.address:
+                    if not seen_modified:
+                        seen_modified = True
+                    else: 
+                        command.address += size_change
+                        changed = True
+            if command.command and (command.command.command == 0x10 or command.command.command == 0x11):
+                command.name = c2t.command_to_text(command.command, command.address, [])
+                changed = True
+            if changed:
+                affected_index = self.get_index_for_item(command)
+                self.dataChanged.emit(
+                    self.createIndex(affected_index.row(), 0, affected_index.internalPointer()),
+                    self.createIndex(affected_index.row(), 1, affected_index.internalPointer()),
+                    [Qt.ItemDataRole.DisplayRole]
+                )
+
+    def supportedDropActions(self) -> Qt.DropAction:
+        return Qt.DropAction.MoveAction
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        default_flags = super().flags(index)
+        if index.isValid():
+            return default_flags | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+        return default_flags | Qt.ItemFlag.ItemIsDropEnabled
+
+    def mimeTypes(self) -> list[str]:
+        return ['application/x-commanditem']
+
+    def mimeData(self, indexes: list[QModelIndex]) -> QMimeData:
+        mime_data = QMimeData()
+        encoded_data = bytearray()
+        
+        # Store the row and parent information for each index
+        selected_items = []
+        for index in indexes:
+            if index.column() == 0:  # Only process first column
+                item = index.internalPointer()
+                selected_items.append((item, index))
+        
+        # Store the selected items in mime data
+        mime_data.setData('application/x-commanditem', bytes(str(id(selected_items)), 'utf-8'))
+        # Store the actual items in a class variable for access during drop
+        self._drag_items = selected_items
+        return mime_data
+
+    def canDropMimeData(self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: QModelIndex) -> bool:
+        if not data.hasFormat('application/x-commanditem'):
+            return False
+            
+        if not hasattr(self, '_drag_items'):
+            return False
+            
+        # Get target item
+        target_item = parent.internalPointer() if parent.isValid() else self._root
+        
+        # Check if any dragged item is an ancestor of the target
+        for (item, _) in self._drag_items:
+            current = target_item
+            while current is not None:
+                if current == item:
+                    print("Error: Cannot drop an item onto its own descendant")
+                    return False
+                current = current.parent
+                
+        return True
+
+    def dropMimeData(self, data: QMimeData, action: Qt.DropAction, row: int, column: int, parent: QModelIndex) -> bool:
+        if not self.canDropMimeData(data, action, row, column, parent):
+            return False
+
+        if action == Qt.DropAction.IgnoreAction:
+            return True
+
+        # Get target item and dragged items
+        target_item = parent.internalPointer() if parent.isValid() else self._root_item
+        
+        # Remove items from their current positions
+        items_to_move = []
+        for (item, index) in self._drag_items:
+            if item.parent:
+                self.delete_command(index)
+                items_to_move.append((item, len(item.command)))
+        # Determine insert position and parent
+        if target_item.children and target_item.command and target_item.command.command in EventCommand.conditional_commands:
+            # Case 1: Dropping onto a conditional command - insert at beginning of its children
+            target_parent = target_item
+            insert_pos = 0
+            # Calculate insert address - should be right after the conditional command
+            insert_address = target_item.address + len(target_item.command)
+        else:
+            # Case 2: Dropping after a command - insert after it in its parent
+            target_parent = target_item.parent if target_item.parent else self._root_item
+            insert_pos = target_parent.children.index(target_item) + 1
+            # Calculate insert address - should be after the target item
+            insert_address = target_item.address + len(target_item.command)
+
+        # Insert items at new position        
+        current_address = insert_address
+        for item, command_size in items_to_move:
+            self.insert_command(self.get_index_for_item(target_parent), insert_pos, item.command, current_address)
+            current_address += command_size
+            insert_pos += 1
+        print_command_tree(self)
+        return True
+
+    def get_all_items_after(self, start_item: CommandItem) -> list[CommandItem]:
+        """Get all items that come after the given item in a depth-first traversal of the entire tree"""
+        items = []
+        found_start = False
+        
+        def traverse(item: CommandItem):
+            nonlocal found_start, items
+            
+            # Check if this is the start item
+            if item == start_item:
+                found_start = True
+                return
+                
+            # If we've found the start item, add this item to our list
+            if found_start:
+                items.append(item)
+                
+            # Continue traversing children
+            for child in item.children:
+                traverse(child)
+        
+        def traverse_from_root():
+            nonlocal found_start, items  # Add nonlocal declaration here
+            
+            # Start with root's children
+            for root_child in self._root_item.children:
+                # If we've found our start item, add all subsequent items
+                if found_start:
+                    items.append(root_child)
+                    # Add all descendants of this item
+                    for child in root_child.children:
+                        traverse(child)
+                else:
+                    # If this is our start item, mark it and continue to next sibling
+                    if root_child == start_item:
+                        found_start = True
+                        continue
+                        
+                    # Haven't found start item yet, traverse this subtree
+                    traverse(root_child)
+        
+        # Start the traversal
+        traverse_from_root()
+        return items
+
+    def _collect_all_children(self, item: CommandItem, items: list[CommandItem]):
+        """Helper method to collect all children of an item"""
+        for child in item.children:
+            items.append(child)
+            self._collect_all_children(child, items)
+
+    def get_index_for_item(self, item: CommandItem) -> QModelIndex:
+        """Find the model index for a given item"""
+        if item == self._root_item or item is None:
+            return QModelIndex()
+            
+        if item.parent == self._root_item:
+            row = self._root_item.children.index(item)
+            return self.createIndex(row, 0, item)
+        else:
+            parent = item.parent
+            row = parent.children.index(item)
+            parent_index = self.get_index_for_item(parent)
+            return self.index(row, 0, parent_index)
 
     def rowCount(self, parent: QModelIndex) -> int:
         if not parent.isValid():
@@ -501,6 +509,12 @@ class CommandModel(QAbstractItemModel):
                     )
             if item.address == modified_item.address:
                 seen_modified = True
+
+    def change_location(self, location_id: int):
+        self._location_id = location_id
+        items = process_script(self._ct_rom.script_manager.get_script(location_id))
+        new_root = CommandItem(name="Root", children=items)
+        self.replace_items(new_root)
 
 def print_command_tree(model: CommandModel):
     """
