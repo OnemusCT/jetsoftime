@@ -552,6 +552,14 @@ class EventCommand:
         offset = get_offset(script_addr)
 
         return EventCommand.generic_command(cmd_id, offset)
+    
+    @staticmethod
+    def decrement_mem(script_addr: int) -> EventCommand:
+        if not is_script_mem(script_addr):
+            raise ValueError('Can only increment script memory')
+        offset = get_offset(script_addr)
+
+        return EventCommand.generic_command(0x73, offset)
 
     @staticmethod
     def add_value_to_mem(value: int, script_addr: int):
@@ -1288,6 +1296,134 @@ class EventCommand:
             raise ValueError("Address must be in script memory")
         return EventCommand.generic_one_arg(0x8A, get_offset(addr))
 
+    @staticmethod
+    def toggle_bits(address: int, bitmask: int) -> EventCommand:
+        """Toggle bits in script memory using bitmask.
+        
+        Args:
+            address: Script memory address (0x7F0200-0x7F0400)
+            bitmask: Mask of bits to toggle (0-0xFF)
+            
+        Returns:
+            EventCommand that will toggle specified bits
+        """
+        if not is_script_mem(address):
+            raise ValueError('toggle_bits must operate on script memory.')
+
+        if not address % 2 == 0:
+            raise ValueError('toggle_bits must operate on even addresses.')
+
+        if not 0 <= bitmask < 0x100:
+            raise ValueError('bitmask must be in [0, 0x100)')
+
+        offset = (address - 0x7F0200)//2
+        return EventCommand.generic_two_arg(0x6B, bitmask, offset)
+
+    @staticmethod
+    def shift_bits(address: int, shift_amount: int) -> EventCommand:
+        """Shift bits right in script memory.
+        
+        Args:
+            address: Script memory address (0x7F0200-0x7F0400)
+            shift_amount: Number of bits to shift right
+            
+        Returns:
+            EventCommand that will shift bits right
+        """
+        if not is_script_mem(address):
+            raise ValueError('shift_bits must operate on script memory.')
+
+        if not address % 2 == 0:
+            raise ValueError('shift_bits must operate on even addresses.')
+
+        if not 0 <= shift_amount <= 7:
+            raise ValueError('shift_amount must be between 0 and 7')
+
+        offset = (address - 0x7F0200)//2
+        return EventCommand.generic_two_arg(0x6F, shift_amount, offset)
+
+    @staticmethod
+    def set_bit_at_0x7E0154(bit_pattern: int) -> EventCommand:
+        """Set specific bits at memory address 0x7E0154.
+        
+        Args:
+            bit_pattern: Which bits to set (0x04, 0x08, or 0x10)
+            
+        Returns:
+            EventCommand that will set the specified bits
+        """
+        if bit_pattern == 0x04:
+            return EventCommand.generic_zero_arg(0x2A)
+        elif bit_pattern == 0x08:
+            return EventCommand.generic_zero_arg(0x2B)
+        elif bit_pattern == 0x10:
+            return EventCommand.generic_zero_arg(0x32)
+        else:
+            raise ValueError('bit_pattern must be 0x04, 0x08 or 0x10')
+
+    @staticmethod
+    def add_mem_to_mem(from_addr: int, to_addr: int, num_bytes: int = 1) -> EventCommand:
+        """Add value from one memory location to another.
+        
+        Args:
+            from_addr: Source memory address in script memory
+            to_addr: Destination memory address in script memory
+            num_bytes: Number of bytes (1 or 2)
+        """
+        if not is_script_mem(from_addr) or not is_script_mem(to_addr):
+            raise ValueError('Addresses must be in script memory')
+            
+        if not from_addr % 2 == 0 or not to_addr % 2 == 0:
+            raise ValueError('Addresses must be even')
+            
+        if num_bytes not in (1, 2):
+            raise ValueError('num_bytes must be 1 or 2')
+            
+        cmd_id = 0x5D if num_bytes == 1 else 0x5E
+        return EventCommand.generic_two_arg(cmd_id, get_offset(from_addr), get_offset(to_addr))
+
+    @staticmethod
+    def subtract_mem_from_mem(from_addr: int, to_addr: int) -> EventCommand:
+        """Subtract value at one memory location from another.
+        
+        Args:
+            from_addr: Source memory address in script memory 
+            to_addr: Destination memory address in script memory
+        """
+        if not is_script_mem(from_addr) or not is_script_mem(to_addr):
+            raise ValueError('Addresses must be in script memory')
+            
+        if not from_addr % 2 == 0 or not to_addr % 2 == 0:
+            raise ValueError('Addresses must be even')
+            
+        return EventCommand.generic_two_arg(0x61, get_offset(from_addr), get_offset(to_addr))
+
+    @staticmethod
+    def subtract_value_from_mem(value: int, addr: int, num_bytes: int = 1) -> EventCommand:
+        """Subtract value from memory location.
+        
+        Args:
+            value: Value to subtract
+            addr: Memory address in script memory
+            num_bytes: Number of bytes (1 or 2)
+        """
+        if not is_script_mem(addr):
+            raise ValueError('Address must be in script memory')
+            
+        if not addr % 2 == 0:
+            raise ValueError('Address must be even')
+
+        if num_bytes == 1:
+            if not 0 <= value < 0x100:
+                raise ValueError('Value must be 0-FF for 1 byte operation')
+            cmd_id = 0x5F
+        else:
+            if not 0 <= value < 0x10000:
+                raise ValueError('Value must be 0-FFFF for 2 byte operation')
+            cmd_id = 0x60
+            
+        return EventCommand.generic_two_arg(cmd_id, value, get_offset(addr))
+    
     def copy(self) -> EventCommand:
         ret_command = EventCommand(-1, 0, [], [], '', '')
         ret_command.command = self.command

@@ -33,6 +33,11 @@ def get_pc(pc: int) -> str:
         return lu.pcs[pc]
     return str(pc)
 
+def get_storyline_text(storyline: int) -> str:
+    if storyline in lu.storyline:
+        return lu.storyline[storyline]
+    return f"0x{storyline:02X}"
+
 def val_to_obj(obj: int) -> int:
     return int(obj/2)
 
@@ -92,13 +97,13 @@ def load_obj_coords(args) -> str:
     return "Load Obj{} Coords into {},{}".format(val_to_obj(args[0]), address_offset(args[1]), address_offset(args[2]))
 
 def load_pc_coords(args) -> str:
-    return "Load PC{} Coords into {},{}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]), address_offset(args[2]))
+    return "Load {} Coords into {},{}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]), address_offset(args[2]))
 
 def load_obj_facing(args) -> str:
     return "Load Obj{} Facing into {}".format(val_to_obj(args[0]), address_offset(args[1]))
 
 def load_pc_facing(args) -> str:
-    return "Load PC{} Facing into {}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]))
+    return "Load {} Facing into {}".format(get_pc(val_to_obj(args[0])), address_offset(args[1]))
 
 def assign_local(args) -> str:
     return "Set 0x{:02X} = {}".format(args[0], address_offset(args[1]))
@@ -201,10 +206,47 @@ def random(args) -> str:
     return "Store random value in {}".format(address_offset(args[0]))
 
 def load_pc_extended(args) -> str:
-    return "Load PC{:02X} if in party".format(args[0])
+    return "Load {} if in party".format(get_pc(args[0]))
 
 def load_pc_forced(args) -> str:
-    return "Load PC{:02X}".format(args[0])
+    return "Load {} (forced)".format(get_pc(args[0]))
+
+def move_to_pc(args) -> str:
+    return "Move to {} distance {:02X}".format(get_pc(args[0]), args[1])
+
+def has_active_pc(args) ->str:
+    return "If(!{} Active)".format(get_pc(args[0]))
+
+def has_recruited_pc(args) -> str:
+    return "If(!{} Recruited)".format(get_pc(args[0]))
+
+def move_pc_to_reserve(args) -> str:
+    return "Move {} to reserve".format(get_pc(args[0]))
+
+def remove_pc_from_party(args) -> str:
+    return "Remove {} from active party".format(get_pc(args[0]))
+
+def remove_pc(args) -> str:
+    return "Remove {}",format(get_pc(args[0]))
+
+def follow_pc(args) -> str:
+    return "Follow {}".format(get_pc(args[0]))
+
+def add_pc_to_reserve(args) -> str:
+    return "Add {} to reserve".format(get_pc(args[0]))
+
+def add_pc_to_active(args) -> str:
+    return "Add {} to active party".format(get_pc(args[0]))
+
+def face_pc(args) -> str:
+    return "Face {}".format(get_pc(args[0]))
+
+def move_towards_pc(args) -> str:
+    return "Move toward {}".format(get_pc(args[0]))
+
+def loop_move_to_pc(args) -> str:
+    return "Loop move to {}".format(get_pc(args[0]))
+
 
 def load_npc(args) -> str:
     return "Load NPC ({})".format(lu.npcs[args[0]])
@@ -275,7 +317,7 @@ def remove_item(args) -> str:
     return "Remove {}".format(lu.items[args[0]])
 
 def equip_item(args) -> str:
-    return "Equip {} on PC{:02X}".format(lu.items[args[0]], args[1])
+    return "Equip {} on {}".format(lu.items[args[0]], get_pc(args[1]))
 
 def item_quantity(args) -> str:
     return "Get {} quantity into 0x{:02X}".format(lu.items[args[0]], args[1])
@@ -291,6 +333,12 @@ def change_location(args) -> str:
         if args[0] == id:
             return "Change Location({}, {},{})".format(name, args[1], args[2])
     return "Change Location({:02X}, {},{})".format(args[0], args[1], args[2])
+
+def if_storyline(args) -> str:
+    return "If(Storyline < {})".format(get_storyline_text(args[0]))
+
+def set_storyline(args) -> str:
+    return "Set Storyline = {}".format(get_storyline_text(args[0]))
 
 _command_to_text = {
     0x00: "Return",
@@ -317,7 +365,7 @@ _command_to_text = {
     0x15: if_address,
     0x16: if_local_val,
     0x17: "Set NPC Facing Down",
-    0x18: "If(Storyline < {:02X})",
+    0x18: if_storyline,
     0x19: get_result_7f0200,
     0x1A: "If(!{:02X})",
     0x1B: "Set NPC Facing Left",
@@ -335,15 +383,15 @@ _command_to_text = {
     0x27: if_visible,
     0x28: if_battle_range,
     0x29: "Load Ascii Text({:02X})",
-    0x2A: "Unknown 0x2A",
-    0x2B: "Unknown 0x2B",
+    0x2A: "Set bit 0x4 at 7E0154",
+    0x2B: "Set bit 0x8 at 7E0154",
     0x2C: "Unknown 0x2C",
     0x2D: "If(no buttons pressed)",
     0x2E: "Color Math (mode: {})",
-    0x2F: "Unknown 0x2F",
+    0x2F: "Scroll Layers 0x2F",
     0x30: "If(dashing)",
     0x31: "If(confirm)",
-    0x32: "Unknown 0x32",
+    0x32: "Set bit 0x10 at 7E0154",
     0x33: "Change Palette to {:02X}",
     0x34: "If(A pressed)",
     0x35: "If(B pressed)",
@@ -383,14 +431,12 @@ _command_to_text = {
     0x57: "Load Crono",
     0x58: assign_mem_to_local_mem,
     0x59: assign_mem_to_local_mem,
-    0x5A: "Set Storyline = {:02X}",
+    0x5A: set_storyline,
     0x5B: add_val_to_mem_local,
     0x5C: "Load Marle",
     0x5D: add_mem_to_mem,
     0x5E: add_mem_to_mem,
     #0x5F:
-    0xE0: change_location,
-    0xE1: change_location,
     0x5F: subtract_val,
     #0x60: "0x{:02X} -= {:04X}".format(address_offset(args[2]), args[0:2]),  # Two byte version
     0x61: subtract_mem_to_mem,
@@ -428,22 +474,22 @@ _command_to_text = {
     0x91: "Disable object drawing",
     0x92: vector_move,
     0x94: "Follow object {:02X}",
-    0x95: "Follow PC{:02X}",
+    0x95: follow_pc,
     0x96: set_coord,  # Similar to 8B but specifically for NPC movement
     0x97: "Move to coords from (0x{:02X},0x{:02X})",
     0x98: "Move to object {:02X} distance {:02X}",
-    0x99: "Move to PC{:02X} distance {:02X}",
+    0x99: move_to_pc,
     0x9A: move_to_coords,
     0x9C: vector_move,  # Similar to 92 but doesn't change facing
     0x9D: vector_move_from_mem,
     0x9E: "Move toward object {:02X}",
-    0x9F: "Move toward PC{:02X}",
+    0x9F: move_towards_pc,
     0xA0: "Move to ({}, {}, Animated)",
     0xA1: "Move to (0x{:02X}, 0x{:02X}, Animated)",
     0xA6: "Set NPC facing {:02X}",
     0xA7: "Set NPC facing from 0x{:02X}",
     0xA8: "Face object {:02X}",
-    0xA9: "Face PC{:02X}",
+    0xA9: face_pc,
     0xAA: "Play looping animation {:02X}",
     0xAB: "Play animation {:02X}",
     0xAC: "Play static animation {:02X}",
@@ -456,7 +502,7 @@ _command_to_text = {
     0xB3: "Play animation 00",
     0xB4: "Play animation 01",
     0xB5: "Loop move to object {:02X}",
-    0xB6: "Loop move to PC{:02X}",
+    0xB6: loop_move_to_pc,
     0xB7: "Play animation {:02X} for {:02X} loops",
     0xB8: "Set string index to 0x{:06X}",
     0xB9: "Pause for 1/4 second",
@@ -477,18 +523,20 @@ _command_to_text = {
     0xCC: "If(gold < {:04X})",
     0xCD: "Add {:04X} gold",
     0xCE: "Subtract {:04X} gold",
-    0xCF: "If(!has_pc({:02X}))",
-    0xD0: "Add PC{:02X} to reserve",
-    0xD1: "Remove PC{:02X}",
-    0xD2: "If(!has_active_pc({:02X}))",
-    0xD3: "Add PC{:02X} to active party",
-    0xD4: "Move PC{:02X} to reserve",
+    0xCF: has_recruited_pc,
+    0xD0: add_pc_to_reserve,
+    0xD1: remove_pc,
+    0xD2: has_active_pc,
+    0xD3: add_pc_to_active,
+    0xD4: move_pc_to_reserve,
     0xD5: equip_item,
-    0xD6: "Remove PC{:02X} from active party",
+    0xD6: remove_pc_from_party,
     0xD7: item_quantity,
     0xD8: "Start battle (flags: {:02X} {:02X})",
     0xD9: "Move party to ({},{}) ({},{}) ({},{})",
     0xDA: "Enable party follow",
+    0xE0: change_location,
+    0xE1: change_location,
     0xE3: "Set explore mode {:02X}",
     0xE4: "Copy tiles ({},{}) to ({},{}) at ({},{}) flags:{:02X}",
     0xE5: "Copy tiles ({},{}) to ({},{}) at ({},{}) flags:{:02X}",

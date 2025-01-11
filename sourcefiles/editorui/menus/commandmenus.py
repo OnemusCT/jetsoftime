@@ -38,6 +38,14 @@ from editorui.menus.SetStorylineMenu import SetStorylineMenu
 from editorui.menus.SpriteCollisionMenu import SpriteCollisionMenu
 from editorui.menus.ValToMemAssignMenu import ValToMemAssignMenu
 from editorui.menus.VectorMoveMenu import VectorMoveMenu
+from editorui.menus.BitMathMenu import BitMathMenu
+from editorui.menus.DownshiftMenu import DownshiftMenu
+from editorui.menus.SetAtMenu import SetAtMenu
+from editorui.menus.MemByteMathMenu import MemByteMathMenu
+from editorui.menus.ValByteMathMenu import ValByteMathMenu
+from editorui.menus.CheckPartyMenu import CheckPartyMenu
+from editorui.menus.CheckResultMenu import CheckResultMenu
+from editorui.menus.CheckStorylineMenu import CheckStorylineMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -59,15 +67,29 @@ menu_mapping = {
     EventCommandType.BATTLE: {
         EventCommandSubtype.BATTLE: BattleMenu()
     },
-    EventCommandType.BIT_MATH: {},
-    EventCommandType.BYTE_MATH: {},
+    EventCommandType.BIT_MATH: {
+        EventCommandSubtype.BIT_MATH: BitMathMenu(),
+        EventCommandSubtype.DOWNSHIFT: DownshiftMenu(),
+        EventCommandSubtype.SET_AT: SetAtMenu(),
+    },
+    EventCommandType.BYTE_MATH: {
+        EventCommandSubtype.MEM_TO_MEM_BYTE: MemByteMathMenu(), # not sure about this
+        EventCommandSubtype.VAL_TO_MEM_BYTE: ValByteMathMenu(),
+
+    },
     EventCommandType.CHANGE_LOCATION: {},
     EventCommandType.CHECK_BUTTON: {
         EventCommandSubtype.CHECK_BUTTON: CheckButtonMenu()
     },
-    EventCommandType.CHECK_PARTY: {},
-    EventCommandType.CHECK_RESULT: {},
-    EventCommandType.CHECK_STORYLINE: {},
+    EventCommandType.CHECK_PARTY: {
+        EventCommandSubtype.CHECK_PARTY: CheckPartyMenu()
+    },
+    EventCommandType.CHECK_RESULT: {
+        EventCommandSubtype.CHECK_RESULT: CheckResultMenu()
+    },
+    EventCommandType.CHECK_STORYLINE: {
+        EventCommandSubtype.CHECK_STORYLINE: CheckStorylineMenu()
+    },
     EventCommandType.COMPARISON: {},
     EventCommandType.END: {},
     EventCommandType.FACING: {},
