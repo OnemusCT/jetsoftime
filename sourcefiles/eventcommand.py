@@ -169,13 +169,19 @@ class EventCommand:
 
     @staticmethod
     def change_location(location, x_coord, y_coord, facing=0,
-                        unk=0, wait_vblank=True) -> EventCommand:
+                        unk=0, wait_vblank=True, variant_override=None) -> EventCommand:
         # There are many different change location commands.  I'll update this
         # as I understand their differences.
         if wait_vblank:
+            if variant_override is not None:
+                raise ValueError('variant_override cannot be set if wait_vblank is true')
             cmd = 0xE1
         else:
             cmd = 0xE0
+            if variant_override is not None:
+                if variant_override not in [0xDC, 0xDD, 0xDE, 0xDF, 0xE0]:
+                    raise ValueError('invalid variant_override')
+                cmd = variant_override
 
         ret_cmd = event_commands[cmd].copy()
         ret_cmd.args = [0, 0, 0]
@@ -305,11 +311,13 @@ class EventCommand:
         return x
 
     @staticmethod
-    def set_own_drawing_status(is_drawn):
+    def set_own_drawing_status(is_drawn: bool, use_7e: bool=False):
         if is_drawn:
+            if use_7e:
+                raise ValueError("is_drawn and use_7e not compatible")
             cmd_id = 0x90
         else:
-            cmd_id = 0x91
+            cmd_id = 0x7E if use_7e else 0x91
 
         x = event_commands[cmd_id].copy()
         return x
@@ -1423,7 +1431,54 @@ class EventCommand:
             cmd_id = 0x60
             
         return EventCommand.generic_two_arg(cmd_id, value, get_offset(addr))
-    
+
+    @staticmethod
+    def check_drawn(obj_id: int, jump_bytes: int) -> EventCommand:
+        """Check if object is visible, jump if not visible.
+        
+        Args:
+            obj_id (int): Object ID to check
+            jump_bytes (int): Number of bytes to jump if not visible
+        """
+        return EventCommand.generic_two_arg(0x27, obj_id // 2, jump_bytes)
+
+    @staticmethod
+    def check_in_battle(obj_id: int, jump_bytes: int) -> EventCommand:
+        """Check if object is in battle range, jump if not in range.
+        
+        Args:
+            obj_id (int): Object ID to check
+            jump_bytes (int): Number of bytes to jump if not in battle range
+        """
+        return EventCommand.generic_two_arg(0x28, obj_id // 2, jump_bytes)
+
+    @staticmethod
+    def mem_to_mem_compare(address1: int, address2: int, operation: Operation, 
+                        num_bytes: int, jump_bytes: int) -> EventCommand:
+        """Compare two memory locations.
+        
+        Args:
+            address1: First memory address
+            address2: Second memory address 
+            operation: Comparison operation to perform
+            num_bytes: Number of bytes to compare (1 or 2)
+            jump_bytes: Number of bytes to jump if comparison is false
+        """
+        command_id = 0x15 if num_bytes == 2 else 0x14
+        
+        if not is_script_mem(address1) or not is_script_mem(address2):
+            raise ValueError('Can only compare script memory addresses')
+            
+        offset1 = get_offset(address1)
+        offset2 = get_offset(address2)
+        
+        return EventCommand.generic_command(
+            command_id,
+            offset1, 
+            offset2,
+            int(operation),
+            jump_bytes
+        )   
     def copy(self) -> EventCommand:
         ret_command = EventCommand(-1, 0, [], [], '', '')
         ret_command.command = self.command

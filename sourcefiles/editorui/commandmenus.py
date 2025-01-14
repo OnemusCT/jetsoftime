@@ -46,6 +46,18 @@ from editorui.menus.ValByteMathMenu import ValByteMathMenu
 from editorui.menus.CheckPartyMenu import CheckPartyMenu
 from editorui.menus.CheckResultMenu import CheckResultMenu
 from editorui.menus.CheckStorylineMenu import CheckStorylineMenu
+from editorui.menus.PauseMenu import PauseMenu
+from editorui.menus.GotoMenu import GotoMenu
+from editorui.menus.EndMenu import EndMenu
+from editorui.menus.HpMpMenu import HPMPMenu
+from editorui.menus.ChangeLocationMenu import ChangeLocationMenu
+from editorui.menus.CheckDrawnMenu import CheckDrawnMenu
+from editorui.menus.CheckInBattleMenu import CheckInBattleMenu
+from editorui.menus.ComparisonMenu import ComparisonMenu
+from editorui.menus.DrawStatusMenu import DrawStatusMenu
+from editorui.menus.DrawStatusFromMemMenu import DrawStatusFromMemMenu
+from editorui.menus.LoadSpriteMenu import LoadSpriteMenu
+from editorui.menus.SpritePriorityMenu import SpritePriorityMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -77,7 +89,9 @@ menu_mapping = {
         EventCommandSubtype.VAL_TO_MEM_BYTE: ValByteMathMenu(),
 
     },
-    EventCommandType.CHANGE_LOCATION: {},
+    EventCommandType.CHANGE_LOCATION: {
+        EventCommandSubtype.CHANGE_LOCATION: ChangeLocationMenu()
+    },
     EventCommandType.CHECK_BUTTON: {
         EventCommandSubtype.CHECK_BUTTON: CheckButtonMenu()
     },
@@ -90,11 +104,22 @@ menu_mapping = {
     EventCommandType.CHECK_STORYLINE: {
         EventCommandSubtype.CHECK_STORYLINE: CheckStorylineMenu()
     },
-    EventCommandType.COMPARISON: {},
-    EventCommandType.END: {},
+    EventCommandType.COMPARISON: {
+        EventCommandSubtype.CHECK_DRAWN: CheckDrawnMenu(),
+        EventCommandSubtype.CHECK_IN_BATTLE: CheckInBattleMenu(),
+        EventCommandSubtype.MEM_TO_MEM_COMP: ComparisonMenu(),
+        EventCommandSubtype.VAL_TO_MEM_COMP: ComparisonMenu(),
+    },
+    EventCommandType.END: {
+        EventCommandSubtype.END: EndMenu()
+    },
     EventCommandType.FACING: {},
-    EventCommandType.GOTO: {},
-    EventCommandType.HP_MP: {},
+    EventCommandType.GOTO: {
+        EventCommandSubtype.GOTO: GotoMenu()
+    },
+    EventCommandType.HP_MP: {
+        EventCommandSubtype.RESTORE_HPMP: HPMPMenu()
+    },
     EventCommandType.INVENTORY: {
         EventCommandSubtype.EQUIP: EquipItemMenu(),
         EventCommandSubtype.GET_AMOUNT: GetItemQuantityMenu(),
@@ -111,7 +136,9 @@ menu_mapping = {
     EventCommandType.PALETTE: {
         EventCommandSubtype.CHANGE_PALETTE: ChangePaletteMenu()
     },
-    EventCommandType.PAUSE: {},
+    EventCommandType.PAUSE: {
+        EventCommandSubtype.PAUSE: PauseMenu(),
+    },
     EventCommandType.PARTY_MANAGEMENT: {},
     EventCommandType.RANDOM_NUM: {
         EventCommandSubtype.RANDOM_NUM: RandomNumberMenu()
@@ -123,7 +150,12 @@ menu_mapping = {
     EventCommandType.SPRITE_COLLISION: {
         EventCommandSubtype.SPRITE_COLLISION: SpriteCollisionMenu()
     },
-    EventCommandType.SPRITE_DRAWING: {},
+    EventCommandType.SPRITE_DRAWING: {
+        EventCommandSubtype.SPRITE_PRIORITY: SpritePriorityMenu(),
+        EventCommandSubtype.LOAD_SPRITE: LoadSpriteMenu(),
+        EventCommandSubtype.DRAW_STATUS: DrawStatusMenu(),
+        EventCommandSubtype.DRAW_STATUS_FROM_MEM: DrawStatusFromMemMenu(),
+    },
     EventCommandType.SPRITE_MOVEMENT: {
         EventCommandSubtype.CONTROLLABLE: ControllableMenu(),
         EventCommandSubtype.EXPLORE_MODE: ExploreModeMenu(),

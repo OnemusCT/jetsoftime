@@ -5,6 +5,17 @@ from eventcommand import EventCommand
 from PyQt6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 class SpecialDialogMenu(BaseCommandMenu):
+    PC_VALUES = {
+        0: "Crono",
+        1: "Marle",
+        2: "Lucca", 
+        3: "Robo",
+        4: "Frog",
+        5: "Ayla",
+        6: "Magus",
+        7: "Epoch"
+    }
+
     def command_widget(self) -> QWidget:
         result = QWidget()
         layout = QVBoxLayout()
@@ -17,8 +28,8 @@ class SpecialDialogMenu(BaseCommandMenu):
         self.dialog_id = ValidatingLineEdit(min_value=0, max_value=0xFF)
 
         self.char_id = QComboBox()
-        for i in range(8):  # 0-7 for different characters
-            self.char_id.addItem(f"Character {i}")
+        for id, name in self.PC_VALUES.items():
+            self.char_id.addItem(name, id)
 
         self.mode.currentIndexChanged.connect(self._on_mode_changed)
 
@@ -40,7 +51,7 @@ class SpecialDialogMenu(BaseCommandMenu):
             if mode == 0:
                 return EventCommand.replace_characters()
             elif mode == 1:
-                return EventCommand.rename_character(self.char_id.currentIndex())
+                return EventCommand.rename_character(self.char_id.currentData())
             else:
                 dialog_id = int(self.dialog_id.text(), 16)
                 return EventCommand.special_dialog(dialog_id)

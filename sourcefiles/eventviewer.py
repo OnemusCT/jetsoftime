@@ -16,7 +16,7 @@ from freespace import FSRom
 import editorui.commandtotext as c2t
 from eventcommand import EventCommand, event_commands
 from editorui.commandgroups import event_command_groupings, EventCommandType, EventCommandSubtype
-import editorui.menus.commandmenus as cm
+import editorui.commandmenus as cm
 from editorui.commanditemmodel import CommandModel
 from editorui.commandtreeview import CommandTreeView
 from base import basepatch

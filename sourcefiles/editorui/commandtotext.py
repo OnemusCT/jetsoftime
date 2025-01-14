@@ -63,8 +63,8 @@ def disable_processing(args) -> str:
 def enable_processing(args) -> str:
     return "Enable Processing(Obj{:02X})".format(val_to_obj(args[0]))
 
-def hide_obj(args) -> str:
-    return "Hide Object(Obj{:02X})".format(val_to_obj(args[0]))
+def remove_obj(args) -> str:
+    return "Remove Object(Obj{:02X})".format(val_to_obj(args[0]))
 
 def if_val(args) -> str:
     return "If({} {} {:02X})".format(address_offset(args[0]), operation_to_str(args[2]), args[1])
@@ -340,6 +340,18 @@ def if_storyline(args) -> str:
 def set_storyline(args) -> str:
     return "Set Storyline = {}".format(get_storyline_text(args[0]))
 
+def play_song(args) -> str:
+    song = f"{args[0]:02X}"
+    if args[0] in lu.music:
+        song = lu.music[args[0]]
+    return "Play song {}".format(song)
+
+def play_sound(args) -> str:
+    sound = f"{args[0]:02X}"
+    if args[0] in lu.sounds:
+        sound = lu.sounds[args[0]]
+    return "Play sound {}".format(sound)
+
 _command_to_text = {
     0x00: "Return",
     0x01: "Color Crash",
@@ -351,7 +363,7 @@ _command_to_text = {
     0x07: "Call PC Event({} {:02X})",
     0x08: "Deactivate Object",
     0x09: "Activate Object",
-    0x0A: hide_obj,
+    0x0A: remove_obj,
     0x0B: disable_processing,
     0x0C: enable_processing,
     0x0D: npc_movement_properties,
@@ -542,8 +554,8 @@ _command_to_text = {
     0xE5: "Copy tiles ({},{}) to ({},{}) at ({},{}) flags:{:02X}",
     0xE6: "Scroll layers (mask: {:02X})",
     0xE7: "Scroll screen to ({},{})",
-    0xE8: "Play sound {:02X}",
-    0xEA: "Play song {:02X}",
+    0xE8: play_sound,
+    0xEA: play_song,
     0xEB: "Set music volume to {:02X} at speed {:02X}",
     0xEC: "Sound command {:02X}",
     0xED: "Wait for silence",
