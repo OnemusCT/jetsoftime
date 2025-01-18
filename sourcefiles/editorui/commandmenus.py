@@ -58,6 +58,15 @@ from editorui.menus.DrawStatusMenu import DrawStatusMenu
 from editorui.menus.DrawStatusFromMemMenu import DrawStatusFromMemMenu
 from editorui.menus.LoadSpriteMenu import LoadSpriteMenu
 from editorui.menus.SpritePriorityMenu import SpritePriorityMenu
+from editorui.menus.WaitForAddMenu import WaitForAddMenu
+from editorui.menus.ShakeScreenMenu import ShakeScreenMenu
+from editorui.menus.ScrollScreenMenu import ScrollScreenMenu
+from editorui.menus.FadeOutMenu import FadeOutMenu
+from editorui.menus.DarkenMenu import DarkenMenu
+from editorui.menus.ColorAddMenu import ColorAddMenu
+from editorui.menus.MemCopyMenu import MemCopyMenu
+from editorui.menus.MultiModeMenu import MultiModeMenu
+
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -129,7 +138,10 @@ menu_mapping = {
         EventCommandSubtype.ITEM: ItemMenu(),
         EventCommandSubtype.ITEM_FROM_MEM: ItemFromMemMenu()
     },
-    EventCommandType.MEM_COPY: {},
+    EventCommandType.MEM_COPY: {
+        EventCommandSubtype.MEM_COPY: MemCopyMenu(),
+        EventCommandSubtype.MULTI_MODE: MultiModeMenu(),
+    },
     EventCommandType.MODE7: {},
     EventCommandType.OBJECT_COORDINATES: {},
     EventCommandType.OBJECT_FUNCTION: {},
@@ -144,7 +156,13 @@ menu_mapping = {
         EventCommandSubtype.RANDOM_NUM: RandomNumberMenu()
     },
     EventCommandType.SCENE_MANIP: {
-        EventCommandSubtype.SCRIPT_SPEED: ScriptSpeedMenu()
+        EventCommandSubtype.SCRIPT_SPEED: ScriptSpeedMenu(),
+        EventCommandSubtype.COLOR_ADD: ColorAddMenu(),
+        EventCommandSubtype.DARKEN: DarkenMenu(),
+        EventCommandSubtype.FADE_OUT: FadeOutMenu(),
+        EventCommandSubtype.SCROLL_SCREEN: ScrollScreenMenu(),
+        EventCommandSubtype.SHAKE_SCREEN: ShakeScreenMenu(),
+        EventCommandSubtype.WAIT_FOR_ADD: WaitForAddMenu(),
     },
     EventCommandType.SOUND: {},
     EventCommandType.SPRITE_COLLISION: {

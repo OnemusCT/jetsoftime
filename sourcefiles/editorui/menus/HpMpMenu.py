@@ -35,4 +35,3 @@ class HPMPMenu(BaseCommandMenu):
             self.restore_type.setCurrentIndex(1)
         elif command == 0xFA:
             self.restore_type.setCurrentIndex(2)
-b

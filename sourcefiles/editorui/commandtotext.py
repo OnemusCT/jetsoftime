@@ -352,13 +352,39 @@ def play_sound(args) -> str:
         sound = lu.sounds[args[0]]
     return "Play sound {}".format(sound)
 
+def _get_function_name(num: int) -> str:
+    """Get the function name based on its number"""
+    if num == 0:
+        return "Startup"
+    elif num == 1:
+        return "Activate" 
+    elif num == 2:
+        return "Touch"
+    else:
+        func_id = num - 3
+        return f"Function {func_id:02X}"
+
+def call_event_cont(args) -> str:
+    return call_event(args, "Obj", "cont")
+def call_event_sync(args) -> str:
+    return call_event(args, "Obj", "sync")
+def call_event_halt(args) -> str:
+    return call_event(args, "Obj", "halt")
+
+
+def call_event(args, type, sync) -> str:
+    priority = args[1] & 0xF0
+    priority /= 0x10
+    func = _get_function_name(args[1] & 0xF)
+    return "Call({}{}, {}, {}, {})".format(type, val_to_obj(args[0]),priority ,func, sync)
+
 _command_to_text = {
     0x00: "Return",
     0x01: "Color Crash",
-    0x02: "Call Event({:02X} {:02X})",
-    0x03: "Call Event({:02X} {:02X})",
-    0x04: "Call Event({:02X} {:02X})",
-    0x05: "Call Event({:02X} {:02X})",
+    0x02: call_event_cont,
+    0x03: call_event_sync,
+    0x04: call_event_halt,
+    0x05: "Call PC Event({:02X} {:02X})",
     0x06: "Call PC Event({} {:02X})",
     0x07: "Call PC Event({} {:02X})",
     0x08: "Deactivate Object",

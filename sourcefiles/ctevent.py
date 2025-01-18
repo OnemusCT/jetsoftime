@@ -1198,6 +1198,9 @@ class Event:
         if end is None:
             end = len(self.data)
 
+        if from_cmd == to_cmd:
+            return
+
         pos: Optional[int] = start
         while True:
             pos = self.find_exact_command_opt(from_cmd, start, end)

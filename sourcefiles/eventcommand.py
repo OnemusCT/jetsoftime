@@ -680,7 +680,8 @@ class EventCommand:
             val = max_val
 
         # Make sure that the target address is in RAM - [0x7E0000, 0x7FFFFF]
-        if not (0x7E0000 <= address <= 0x7FFFFF):
+        # 0x110 and 0x111 are special addresses for disabling the menu and pause.
+        if not (0x7E0000 <= address <= 0x7FFFFF or address in [0x110, 0x111]):
             raise SystemExit(
                 'Address not in RAM memory range [0x7E0000, 0x7FFFFF]'
             )
@@ -1479,6 +1480,42 @@ class EventCommand:
             int(operation),
             jump_bytes
         )   
+    
+    # Add to EventCommand class
+
+    @staticmethod
+    def color_add(color: int, intensity: int, add_sub_mode: bool = False) -> EventCommand:
+        """Create a color addition command.
+        
+        Args:
+            color: BGR color (3 bits)
+            intensity: Color intensity (0-1F)
+            add_sub_mode: Whether to use add/sub mode (adds additional byte)
+        """
+        command = EventCommand.generic_command(0xF1, (color << 5) | (intensity & 0x1F))
+        if add_sub_mode:
+            command.args.append(0x80)
+        return command
+        
+    @staticmethod 
+    def scroll_screen(x: int, y: int) -> EventCommand:
+        """Scroll screen to coordinates."""
+        return EventCommand.generic_command(0xE7, x, y)
+        
+    @staticmethod
+    def shake_screen(enabled: bool) -> EventCommand:
+        """Enable/disable screen shake.
+        
+        Args:
+            enabled: True to enable shake, False to disable
+        """
+        return EventCommand.generic_command(0xF4, 1 if enabled else 0)
+        
+    @staticmethod
+    def wait_for_brighten() -> EventCommand:
+        """Wait for brighten effect to complete."""
+        return EventCommand.generic_zero_arg(0xF3)
+
     def copy(self) -> EventCommand:
         ret_command = EventCommand(-1, 0, [], [], '', '')
         ret_command.command = self.command
@@ -3608,7 +3645,9 @@ def get_command(buf: bytes, offset: int = 0) -> EventCommand:
         if mode in [4, 5]:
             command.arg_lens = [1, 1, 1, 1, 1]
         elif mode == 8:
-            command.arg_lens = [1, 1, 2]
+            copy_len = get_value_from_bytes(buf[offset+3:offset+4]) - 2
+            print(copy_len)
+            command.arg_lens = [1, 1, 2, copy_len]
         else:
             print(f"{command_id:02X}: Error, Unknown Mode")
     elif command_id == 0x4E:
