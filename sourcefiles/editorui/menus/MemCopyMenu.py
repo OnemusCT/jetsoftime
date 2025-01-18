@@ -65,17 +65,11 @@ class MemCopyMenu(BaseCommandMenu):
     def get_command(self) -> EventCommand:
         # Get address components
         addr = self.addr.get_value()
-        bank_addr = addr & 0xFFFF  # Lower 16 bits
-        bank = (addr >> 16) & 0xFF  # Bank byte
         
-        # Convert hex string to bytes
         hex_data = self.data.text().strip().replace(" ", "")
         data_bytes = bytes.fromhex(hex_data)
         
-        # Create command
-        cmd = event_commands[0x4E].copy()
-        cmd.args = [bank_addr, bank, len(data_bytes) + 2, bytearray(data_bytes)]
-        return cmd
+        return EventCommand.mem_copy(addr, data_bytes)
         
     def apply_arguments(self, command: int, args: list):
         if len(args) >= 4:

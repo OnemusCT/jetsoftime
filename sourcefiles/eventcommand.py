@@ -1516,6 +1516,14 @@ class EventCommand:
         """Wait for brighten effect to complete."""
         return EventCommand.generic_zero_arg(0xF3)
 
+    @staticmethod
+    def mem_copy(address: int, bytes: bytearray):
+        command = event_commands[0x4E].copy()
+        command.arg_lens[-1] = len(bytes)
+        command.args = [address & 0xFFFF, (address >> 16) & 0xFF, len(bytes) + 2, bytes]
+
+        return command
+
     def copy(self) -> EventCommand:
         ret_command = EventCommand(-1, 0, [], [], '', '')
         ret_command.command = self.command
