@@ -73,6 +73,9 @@ from editorui.menus.GetFacingMenu import GetFacingMenu
 from editorui.menus.GetObjectCoordMenu import GetObjectCoordMenu
 from editorui.menus.SetObjectCoordMenu import SetObjectCoordMenu
 from editorui.menus.SetObjectCoordMenuFromMem import SetObjectCoordFromMemMenu
+from editorui.menus.CallObjFuncMenu import CallObjFuncMenu
+from editorui.menus.ActivateMenu import ActivateMenu
+from editorui.menus.ScriptProcessingMenu import ScriptProcessingMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -105,7 +108,8 @@ menu_mapping = {
 
     },
     EventCommandType.CHANGE_LOCATION: {
-        EventCommandSubtype.CHANGE_LOCATION: ChangeLocationMenu()
+        EventCommandSubtype.CHANGE_LOCATION: ChangeLocationMenu(),
+        # EventCommandSubtype.VAL_TO_MEM_ASSIGN:
     },
     EventCommandType.CHECK_BUTTON: {
         EventCommandSubtype.CHECK_BUTTON: CheckButtonMenu()
@@ -153,33 +157,49 @@ menu_mapping = {
         EventCommandSubtype.MEM_COPY: MemCopyMenu(),
         EventCommandSubtype.MULTI_MODE: MultiModeMenu(),
     },
-    EventCommandType.MODE7: {},
+    EventCommandType.MODE7: {
+        # EventCommandSubtype.MODE7:
+        # EventCommandSubtype.DRAW_GEOMETRY:
+    },
     EventCommandType.OBJECT_COORDINATES: {
         EventCommandSubtype.GET_OBJ_COORD: GetObjectCoordMenu(),
         EventCommandSubtype.SET_OBJ_COORD: SetObjectCoordMenu(),
         EventCommandSubtype.SET_OBJ_COORD_FROM_MEM: SetObjectCoordFromMemMenu(),
     },
-    EventCommandType.OBJECT_FUNCTION: {},
+    EventCommandType.OBJECT_FUNCTION: {
+        EventCommandSubtype.ACTIVATE: ActivateMenu(),
+        EventCommandSubtype.CALL_OBJ_FUNC: CallObjFuncMenu(),
+        EventCommandSubtype.SCRIPT_PROCESSING: ScriptProcessingMenu(),
+    },
     EventCommandType.PALETTE: {
         EventCommandSubtype.CHANGE_PALETTE: ChangePaletteMenu()
     },
     EventCommandType.PAUSE: {
         EventCommandSubtype.PAUSE: PauseMenu(),
     },
-    EventCommandType.PARTY_MANAGEMENT: {},
+    EventCommandType.PARTY_MANAGEMENT: {
+        # EventCommandSubtype.PARTY_MANIP:
+    },
     EventCommandType.RANDOM_NUM: {
         EventCommandSubtype.RANDOM_NUM: RandomNumberMenu()
     },
     EventCommandType.SCENE_MANIP: {
-        EventCommandSubtype.SCRIPT_SPEED: ScriptSpeedMenu(),
         EventCommandSubtype.COLOR_ADD: ColorAddMenu(),
+        # EventCommandSubtype.COLOR_MATH:
+        # EventCommandSubtype.COPY_TILES:
         EventCommandSubtype.DARKEN: DarkenMenu(),
         EventCommandSubtype.FADE_OUT: FadeOutMenu(),
+        EventCommandSubtype.SCRIPT_SPEED: ScriptSpeedMenu(),
+        # EventCommandSubtype.SCROLL_LAYERS:
+        # EventCommandSubtype.SCROLL_LAYERS_2F:
         EventCommandSubtype.SCROLL_SCREEN: ScrollScreenMenu(),
         EventCommandSubtype.SHAKE_SCREEN: ShakeScreenMenu(),
         EventCommandSubtype.WAIT_FOR_ADD: WaitForAddMenu(),
     },
-    EventCommandType.SOUND: {},
+    EventCommandType.SOUND: {
+        # EventCommandSubtype.SOUND:
+        # EventCommandSubtype.WAIT_FOR_SILENCE:
+    },
     EventCommandType.SPRITE_COLLISION: {
         EventCommandSubtype.SPRITE_COLLISION: SpriteCollisionMenu()
     },
@@ -192,8 +212,8 @@ menu_mapping = {
     EventCommandType.SPRITE_MOVEMENT: {
         EventCommandSubtype.CONTROLLABLE: ControllableMenu(),
         EventCommandSubtype.EXPLORE_MODE: ExploreModeMenu(),
-        # Jump
-        # Jump 7B
+        # EventCommandSubtype.JUMP:
+        # EventCommandSubtype.JUMP_7B:
         EventCommandSubtype.MOVE_PARTY: MovePartyMenu(),
         EventCommandSubtype.MOVE_SPRITE: MoveSpriteMenu(),
         EventCommandSubtype.MOVE_SPRITE_FROM_MEM: MoveSpriteFromMemMenu(),
@@ -214,4 +234,8 @@ menu_mapping = {
         EventCommandSubtype.STRING_INDEX: StringIndexMenu(),
         EventCommandSubtype.TEXTBOX: TextboxMenu()
     },
+    EventCommandType: {
+        # EventCommandSubtype.COLOR_CRASH:
+        # EventCommandSubtype.UNKNOWN:
+    }
 }

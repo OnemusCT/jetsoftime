@@ -1,20 +1,11 @@
 from editorui.menus.BaseCommandMenu import BaseCommandMenu
 from editorui.menus.ValidatingLineEdit import ValidatingLineEdit
 from eventcommand import EventCommand
-from editorui.lookups import npcs, enemies
+from editorui.lookups import npcs, enemies, pcs
 
 from PyQt6.QtWidgets import QCheckBox, QComboBox, QLabel, QVBoxLayout, QWidget
 
 class LoadSpriteMenu(BaseCommandMenu):
-    PC_VALUES = {
-        0: "Crono",
-        1: "Marle",
-        2: "Lucca", 
-        3: "Robo",
-        4: "Frog",
-        5: "Ayla",
-        6: "Magus"
-    }
 
     def command_widget(self) -> QWidget:
         result = QWidget()
@@ -31,8 +22,9 @@ class LoadSpriteMenu(BaseCommandMenu):
         pc_label = QLabel("PC")
         pc_label.setObjectName("PC")
         self.pc_select = QComboBox()
-        for id, name in self.PC_VALUES.items():
-            self.pc_select.addItem(name, id)
+        for id, name in pcs.items():
+            if name != "Epoch":
+                self.pc_select.addItem(name, id)
             
         # NPC selection
         npc_label = QLabel("NPC")

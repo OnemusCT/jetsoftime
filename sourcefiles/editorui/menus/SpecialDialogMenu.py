@@ -1,20 +1,11 @@
 from editorui.menus.BaseCommandMenu import BaseCommandMenu
 from editorui.menus.ValidatingLineEdit import ValidatingLineEdit
 from eventcommand import EventCommand
+from editorui.lookups import pcs
 
 from PyQt6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 class SpecialDialogMenu(BaseCommandMenu):
-    PC_VALUES = {
-        0: "Crono",
-        1: "Marle",
-        2: "Lucca", 
-        3: "Robo",
-        4: "Frog",
-        5: "Ayla",
-        6: "Magus",
-        7: "Epoch"
-    }
 
     def command_widget(self) -> QWidget:
         result = QWidget()
@@ -28,7 +19,7 @@ class SpecialDialogMenu(BaseCommandMenu):
         self.dialog_id = ValidatingLineEdit(min_value=0, max_value=0xFF)
 
         self.char_id = QComboBox()
-        for id, name in self.PC_VALUES.items():
+        for id, name in pcs.items():
             self.char_id.addItem(name, id)
 
         self.mode.currentIndexChanged.connect(self._on_mode_changed)

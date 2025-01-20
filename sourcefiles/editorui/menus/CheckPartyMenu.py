@@ -1,5 +1,6 @@
 from editorui.menus.BaseCommandMenu import BaseCommandMenu
 from editorui.menus.ValidatingLineEdit import ValidatingLineEdit
+from editorui.lookups import pcs
 from eventcommand import EventCommand
 
 from PyQt6.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
@@ -19,14 +20,10 @@ class CheckPartyMenu(BaseCommandMenu):
         # PC Selection dropdown
         pc_label = QLabel("Character:")
         self.pc_id = QComboBox()
-        self.pc_id.addItem("Crono", 0)
-        self.pc_id.addItem("Marle", 1)
-        self.pc_id.addItem("Lucca", 2)
-        self.pc_id.addItem("Robo", 3)
-        self.pc_id.addItem("Frog", 4)
-        self.pc_id.addItem("Ayla", 5)
-        self.pc_id.addItem("Magus", 6)
-
+        for id, name in pcs.items():
+            if name != "Epoch":
+                self.pc_id.addItem(name, id)
+        
         # Jump bytes input
         jump_label = QLabel("Jump Bytes:")
         self.jump_bytes = ValidatingLineEdit(min_value=0, max_value=0xFF)

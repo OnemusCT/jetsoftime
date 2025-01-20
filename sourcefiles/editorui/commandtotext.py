@@ -13,7 +13,7 @@ def command_to_text(command: EventCommand, bytes: int, strings: dict[int, bytear
             return _command_to_text[command.command].format(*command.args)
         elif command.command == 0x10 or command.command == 0x11:
             return _command_to_text[command.command](command.args, bytes)
-        else:
+        elif command.command in _command_to_text:
             return _command_to_text[command.command](command.args)
     return command.to_human_readable_str()
 

@@ -1678,7 +1678,7 @@ event_commands[0xB] = \
 
 event_commands[0xC] = \
     EventCommand(0xC, 1, [1],
-                 ['oo: Object to ensable.'],
+                 ['oo: Object to enable.'],
                  'Enable Processing.',
                  'Turn on script processing.',
                  EventCommandType.OBJECT_FUNCTION,
