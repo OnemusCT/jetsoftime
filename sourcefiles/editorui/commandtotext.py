@@ -227,7 +227,7 @@ def remove_pc_from_party(args) -> str:
     return "Remove {} from active party".format(get_pc(args[0]))
 
 def remove_pc(args) -> str:
-    return "Remove {}",format(get_pc(args[0]))
+    return "Remove {}".format(get_pc(args[0]))
 
 def follow_pc(args) -> str:
     return "Follow {}".format(get_pc(args[0]))

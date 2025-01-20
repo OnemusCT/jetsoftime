@@ -76,6 +76,10 @@ from editorui.menus.SetObjectCoordMenuFromMem import SetObjectCoordFromMemMenu
 from editorui.menus.CallObjFuncMenu import CallObjFuncMenu
 from editorui.menus.ActivateMenu import ActivateMenu
 from editorui.menus.ScriptProcessingMenu import ScriptProcessingMenu
+from editorui.menus.PartyManagementMenu import PartyManagementMenu
+from editorui.menus.VectorMoveFromMemMenu import VectorMoveFromMemMenu
+from editorui.menus.SetSpeedFromMemMenu import SetSpeedFromMemMenu
+from editorui.menus.ChangeLocationFromMemMenu import ChangeLocationFromMemMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -109,7 +113,7 @@ menu_mapping = {
     },
     EventCommandType.CHANGE_LOCATION: {
         EventCommandSubtype.CHANGE_LOCATION: ChangeLocationMenu(),
-        # EventCommandSubtype.VAL_TO_MEM_ASSIGN:
+        EventCommandSubtype.CHANGE_LOCATION_FROM_MEM: ChangeLocationFromMemMenu(),
     },
     EventCommandType.CHECK_BUTTON: {
         EventCommandSubtype.CHECK_BUTTON: CheckButtonMenu()
@@ -178,7 +182,7 @@ menu_mapping = {
         EventCommandSubtype.PAUSE: PauseMenu(),
     },
     EventCommandType.PARTY_MANAGEMENT: {
-        # EventCommandSubtype.PARTY_MANIP:
+        EventCommandSubtype.PARTY_MANIP: PartyManagementMenu(),
     },
     EventCommandType.RANDOM_NUM: {
         EventCommandSubtype.RANDOM_NUM: RandomNumberMenu()
@@ -224,9 +228,9 @@ menu_mapping = {
         EventCommandSubtype.PARTY_FOLLOW: PartyFollowMenu(),
         EventCommandSubtype.DESTINATION: DestinationPropertiesMenu(),
         EventCommandSubtype.VECTOR_MOVE: VectorMoveMenu(),
-        #EventCommandSubtype.VECTOR_MOVE_FROM_MEM: 
+        EventCommandSubtype.VECTOR_MOVE_FROM_MEM: VectorMoveFromMemMenu(),
         EventCommandSubtype.SET_SPEED: SetSpeedMenu(),
-        # EventCommandSubtype.SET_SPEED_FROM_MEM: 
+        EventCommandSubtype.SET_SPEED_FROM_MEM: SetSpeedFromMemMenu(),
     },
     EventCommandType.TEXT: {
         EventCommandSubtype.LOAD_ASCII: LoadASCIIMenu(),
