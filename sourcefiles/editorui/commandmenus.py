@@ -66,7 +66,13 @@ from editorui.menus.DarkenMenu import DarkenMenu
 from editorui.menus.ColorAddMenu import ColorAddMenu
 from editorui.menus.MemCopyMenu import MemCopyMenu
 from editorui.menus.MultiModeMenu import MultiModeMenu
-
+from editorui.menus.FaceObjectMenu import FaceObjectMenu
+from editorui.menus.SetFacingMenu import SetFacingMenu
+from editorui.menus.SetFacingFromMemMenu import SetFacingFromMemMenu
+from editorui.menus.GetFacingMenu import GetFacingMenu
+from editorui.menus.GetObjectCoordMenu import GetObjectCoordMenu
+from editorui.menus.SetObjectCoordMenu import SetObjectCoordMenu
+from editorui.menus.SetObjectCoordMenuFromMem import SetObjectCoordFromMemMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -122,7 +128,12 @@ menu_mapping = {
     EventCommandType.END: {
         EventCommandSubtype.END: EndMenu()
     },
-    EventCommandType.FACING: {},
+    EventCommandType.FACING: {
+        EventCommandSubtype.FACE_OBJECT: FaceObjectMenu(),
+        EventCommandSubtype.GET_FACING: GetFacingMenu(),
+        EventCommandSubtype.SET_FACING: SetFacingMenu(),
+        EventCommandSubtype.SET_FACING_FROM_MEM: SetFacingFromMemMenu(),
+    },
     EventCommandType.GOTO: {
         EventCommandSubtype.GOTO: GotoMenu()
     },
@@ -143,7 +154,11 @@ menu_mapping = {
         EventCommandSubtype.MULTI_MODE: MultiModeMenu(),
     },
     EventCommandType.MODE7: {},
-    EventCommandType.OBJECT_COORDINATES: {},
+    EventCommandType.OBJECT_COORDINATES: {
+        EventCommandSubtype.GET_OBJ_COORD: GetObjectCoordMenu(),
+        EventCommandSubtype.SET_OBJ_COORD: SetObjectCoordMenu(),
+        EventCommandSubtype.SET_OBJ_COORD_FROM_MEM: SetObjectCoordFromMemMenu(),
+    },
     EventCommandType.OBJECT_FUNCTION: {},
     EventCommandType.PALETTE: {
         EventCommandSubtype.CHANGE_PALETTE: ChangePaletteMenu()

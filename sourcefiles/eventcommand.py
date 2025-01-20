@@ -771,6 +771,16 @@ class EventCommand:
             get_offset(x_addr),
             get_offset(y_addr)
         )
+    
+    @staticmethod
+    def get_pc_coordinates(pc_id: int,
+                           x_addr: int,
+                           y_addr: int) ->EventCommand:
+        return EventCommand.generic_command(
+            0x22, pc_id*2,
+            get_offset(x_addr),
+            get_offset(y_addr)
+        )
 
     @staticmethod
     def set_own_coordinates_from_mem(x_addr, y_addr) -> EventCommand:
