@@ -55,6 +55,7 @@ class EventViewer(QMainWindow):
         self.setWindowFlags(Qt.WindowType.Window)
         self.setup_ui()
         self.on_location_changed(0)
+        self._clipboard_data = None
     
     def load_state(self, rom_path: Path):
         rom = CTRom(rom_path.read_bytes(), True)
@@ -72,30 +73,29 @@ class EventViewer(QMainWindow):
         """Create the main menu bar with File and Edit menus"""
         menubar = self.menuBar()
         
-        # File menu
         file_menu = menubar.addMenu("File")
         
-        # Open action
         open_action = file_menu.addAction("Open")
         open_action.triggered.connect(self.on_open)
         
-        # Save action
         save_action = file_menu.addAction("Save")
         save_action.triggered.connect(self.on_save)
         
-        # Save As action
         save_as_action = file_menu.addAction("Save As")
         save_as_action.triggered.connect(self.on_save_as)
         
-        # Edit menu
         edit_menu = menubar.addMenu("Edit")
         
-        # Copy action
+        cut_action = edit_menu.addAction("Cut")
+        cut_action.setShortcut("Ctrl+X")
+        cut_action.triggered.connect(self.on_cut)
+
         copy_action = edit_menu.addAction("Copy")
+        copy_action.setShortcut("Ctrl+C")
         copy_action.triggered.connect(self.on_copy)
         
-        # Paste action
         paste_action = edit_menu.addAction("Paste")
+        paste_action.setShortcut("Ctrl+V")
         paste_action.triggered.connect(self.on_paste)
 
     def on_open(self):
@@ -147,11 +147,52 @@ class EventViewer(QMainWindow):
 
     def on_copy(self):
         """Handle Copy menu action"""
-        pass
+        selected_indexes = self.tree.selectionModel().selectedIndexes()
+        if not selected_indexes:
+            return
+            
+        self._clipboard_data = self.model.copy_items(selected_indexes)
+        
+        # Validate tree state after copy
+        is_match, discrepancies = self.compare_tree_with_script()
+        if not is_match:
+            print("Tree discrepancies found:")
+            for d in discrepancies:
+                print(f"- {d}")
+
+    def on_cut(self):
+        """Handle Cut menu action"""
+        selected_indexes = self.tree.selectionModel().selectedIndexes()
+        if not selected_indexes:
+            return
+            
+        self._clipboard_data = self.model.cut_items(selected_indexes)
+        
+        # Validate tree state after cut
+        is_match, discrepancies = self.compare_tree_with_script()
+        if not is_match:
+            print("Tree discrepancies found:")
+            for d in discrepancies:
+                print(f"- {d}")
 
     def on_paste(self):
         """Handle Paste menu action"""
-        pass  # Placeholder for paste functionality
+        if not self._clipboard_data:
+            return
+            
+        # Get current selection as paste target
+        current_index = self.tree.currentIndex()
+        if not current_index.isValid():
+            return
+            
+        self.model.paste_items(self._clipboard_data, current_index)
+        
+        # Validate tree state after paste
+        is_match, discrepancies = self.compare_tree_with_script()
+        if not is_match:
+            print("Tree discrepancies found:")
+            for d in discrepancies:
+                print(f"- {d}")
 
     def setup_ui(self):
         """Initialize the UI components"""

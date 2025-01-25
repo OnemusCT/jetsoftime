@@ -12,7 +12,6 @@ class CommandModel(QAbstractItemModel):
         self._ct_rom = ct_rom
         self._location_id = location_id
 
-
     def update_command(self, item: CommandItem, new_command: EventCommand):
         """Update an item's command and adjust subsequent addresses based on command size change"""
         print("Updating")
@@ -190,6 +189,93 @@ class CommandModel(QAbstractItemModel):
         self._update_jump_parameters(item, -command_size)
         self._update_addresses(item, -command_size)
         return True
+
+    def copy_items(self, indexes: list[QModelIndex]) -> list[tuple[CommandItem, int]]:
+        """Copy selected items and return list of (item, address_offset) tuples"""
+        if not indexes:
+            return []
+            
+        # Get base address for calculating offsets
+        base_addr = min(idx.internalPointer().address for idx in indexes if idx.column() == 0)
+        
+        # Create deep copies of selected items with relative addresses
+        copied_items = []
+        for index in indexes:
+            if index.column() == 0:  # Only process first column
+                item = index.internalPointer()
+                # Deep copy the item and its children
+                copied_item = self._deep_copy_item(item)
+                # Calculate address offset from base
+                addr_offset = item.address - base_addr
+                copied_items.append((copied_item, addr_offset))
+                
+        return copied_items
+
+    def cut_items(self, indexes: list[QModelIndex]) -> list[tuple[CommandItem, int]]:
+        """Cut selected items - copy them and then delete them"""
+        copied_items = self.copy_items(indexes)
+        
+        # Delete items in reverse order to maintain index validity
+        sorted_indexes = sorted(indexes, key=lambda x: x.row(), reverse=True)
+        for index in sorted_indexes:
+            if index.column() == 0:  # Only process first column
+                self.delete_command(index)
+                
+        return copied_items
+
+    def paste_items(self, items: list[tuple[CommandItem, int]], target_index: QModelIndex):
+        """Paste copied/cut items at the target location"""
+        if not items:
+            return
+            
+        # Get target item and insertion position
+        target_item = target_index.internalPointer() if target_index.isValid() else self._root_item
+        
+        # Determine insert position and parent based on target
+        if target_item.children and target_item.command and target_item.command.command in EventCommand.conditional_commands:
+            # Pasting onto conditional command - insert at start of children
+            target_parent = target_item
+            insert_pos = 0
+            insert_address = target_item.address + len(target_item.command)
+        else:
+            # Pasting after target item
+            target_parent = target_item.parent if target_item.parent else self._root_item
+            insert_pos = target_parent.children.index(target_item) + 1
+            insert_address = target_item.address + len(target_item.command)
+        
+        # Insert items maintaining relative positioning
+        for item, offset in items:
+            addr = insert_address + offset
+            self.insert_command(
+                self.get_index_for_item(target_parent),
+                insert_pos,
+                item.command,
+                addr
+            )
+            insert_pos += 1
+
+    def _deep_copy_item(self, item: CommandItem) -> CommandItem:
+        """Create a deep copy of a CommandItem and its children"""
+        # Copy command
+        if item.command:
+            new_command = item.command.copy()
+        else:
+            new_command = None
+            
+        # Create new item
+        new_item = CommandItem(
+            name=item.name,
+            command=new_command,
+            address=item.address
+        )
+        
+        # Recursively copy children
+        for child in item.children:
+            child_copy = self._deep_copy_item(child)
+            child_copy.parent = new_item
+            new_item.children.append(child_copy)
+            
+        return new_item
 
     def _update_addresses(self,  modified_item: CommandItem, size_change: int, insertion: bool = False):
         all_commands = _get_all_commands(self._root_item)
