@@ -32,6 +32,7 @@ command_len[0x12] = 2
 
 # spiral cw to
 command_len[0x15] = 3
+command_len[0x16] = 3  # Zombor's move X then Y
 
 # move obj to coords
 command_len[0x19] = 3
@@ -329,7 +330,7 @@ class TechScript:
         obj_start = pos + 2*self.num_objs
 
         for i in range(self.num_objs):
-            ptr_b = to_little_endian(obj_start, 2)
+            ptr_b = to_little_endian(obj_start % 0x10000, 2)
             rom[pos:pos+2] = ptr_b
 
             pos += 2

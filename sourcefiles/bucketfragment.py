@@ -11,13 +11,18 @@ import randoconfig as cfg
 import xpscale
 
 
+# TODO: there are no references to this function in the codebase
+# might be WIP or could be something to remove
 def set_bucket_function(ctrom: CTRom, settings: rset.Settings):
     script_man = ctrom.script_manager
     eot_script = script_man.get_script(ctenums.LocID.END_OF_TIME)
 
     new_eot_script = ctevent.Event.from_flux('./flux/bucket_eot.Flux')
 
-    num_fragments = settings.bucket_settings.needed_fragments
+    # TODO: below is only reference to "needed_fragements" in codebase
+    # not sure what it should default to but that should be updated in randosettings
+    # if this should be used
+    num_fragments = getattr(settings.bucket_settings, 'needed_fragments', 0)
 
     start = new_eot_script.get_function_start(0x09, 1)
     end = new_eot_script.get_function_end(0x09, 1)
@@ -72,13 +77,12 @@ def set_fragment_properties(ctrom: CTRom):
     ctrom.rom_data.write(frag_name)
 
 
-def write_fragments_to_config(settings: rset.Settings,
-                              config: cfg.RandoConfig):
-
-    if rset.GameFlags.BUCKET_FRAGMENTS not in settings.gameflags:
-        return
-
-    item_db = config.itemdb
+def write_fragments_to_config(
+        num_fragments: int,
+        settings: rset.Settings,
+        config: cfg.RandoConfig,
+        ):
+    item_db = config.item_db
 
     # 0xFF is a space instead of an item type icon
     item_db[ctenums.ItemID.BUCKETFRAG].name = \
@@ -149,7 +153,6 @@ def write_fragments_to_config(settings: rset.Settings,
     #     print(name)
 
     # print('****')
-
     avail_locs = [loc for loc in all_locs
                   if loc.getName() not in key_loc_names]
 
@@ -157,9 +160,9 @@ def write_fragments_to_config(settings: rset.Settings,
     #     print(x.getName())
 
     # print('****')
-    num_fragments = settings.bucket_settings.num_fragments
     fragment_locs = random.sample(avail_locs, num_fragments)
 
     for x in fragment_locs:
+        # print(f'Putting fragment in {x.getName()}')
         x.setKeyItem(ctenums.ItemID.BUCKETFRAG)
         x.writeKeyItem(config)

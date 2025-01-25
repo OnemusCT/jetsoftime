@@ -1,5 +1,9 @@
+from __future__ import annotations
 import copy
 import random
+
+from itertools import permutations
+from typing import Dict, List
 
 from techdb import TechDB
 from byteops import get_record, set_record, to_little_endian, \
@@ -9,7 +13,6 @@ import ctevent
 from ctrom import CTRom
 import freespace
 import legacyofcyrus
-from statcompute import PCStats as PC
 import scriptextend as scripts
 
 import randoconfig as cfg
@@ -29,10 +32,9 @@ def write_pcs_to_config(settings: rset.Settings, config: cfg.RandoConfig):
     chars = [CharID(i) for i in range(7)]
     random.shuffle(chars)
 
-    key_val = zip(recruit_spots, chars)
-    loc_assign_dict = {recruit_id: char for recruit_id, char in key_val}
+    loc_assign_dict = dict(zip(recruit_spots, chars))
 
-    char_man = config.char_manager
+    pcstats = config.pcstats
     lost_worlds = (rset.GameMode.LOST_WORLDS == settings.game_mode)
     loc = (rset.GameMode.LEGACY_OF_CYRUS == settings.game_mode)
 
@@ -49,63 +51,92 @@ def write_pcs_to_config(settings: rset.Settings, config: cfg.RandoConfig):
         if lost_worlds or recruit_spot in [RecruitID.PROTO_DOME,
                                            RecruitID.DACTYL_NEST,
                                            RecruitID.FROGS_BURROW]:
-            char_man.pcs[chosen_char].stats.set_level(15)
-            char_man.pcs[chosen_char].stats.set_tech_level(3)
+            pcstats.set_level(chosen_char, 15)
+            pcstats.set_tech_level(chosen_char, 3)
         elif recruit_spot in [RecruitID.STARTER_1, RecruitID.STARTER_2,
                               RecruitID.CATHEDRAL]:
-            char_man.pcs[chosen_char].stats.set_level(1)
-            char_man.pcs[chosen_char].stats.set_tech_level(0)
+            pcstats.set_level(chosen_char, 1)
+            pcstats.set_tech_level(chosen_char, 0)
         elif recruit_spot == RecruitID.CASTLE:
-            char_man.pcs[chosen_char].stats.set_level(5)
-            char_man.pcs[chosen_char].stats.set_tech_level(2)
+            pcstats.set_level(chosen_char, 5)
+            pcstats.set_tech_level(chosen_char, 2)
         else:
-            print("Error: Should never see this")
-            exit()
+            raise ValueError('Impossible Recruit Spot')
 
-    # Now, reassign characters if duplicates is on.
+    # Now, reassign characters if char rando is on.
     # It was important to do the scaling first so that we know what level
     # and tech level to use when reassigning
-    if rset.GameFlags.DUPLICATE_CHARS in settings.gameflags:
-        # Catch bad char_choices here?
-        choices = [CharID(random.choice(settings.char_choices[i]))
-                   for i in range(7)]
+    if rset.GameFlags.CHAR_RANDO in settings.gameflags:
+        choices: Dict[CharID, CharID] = {}
+        if rset.GameFlags.DUPLICATE_CHARS in settings.gameflags:
+            for pc_id in CharID:
+                avail_choices = settings.char_settings.choices[int(pc_id)]
+                choices[pc_id] = CharID(random.choice(avail_choices))
+        # unique chars (default for char rando)
+        else:
+            all_choices = [p for p in permutations(range(0, 7), r=7)]
+            shuffle = random.sample(all_choices, k=len(all_choices))
+            try:
+                permutation = next(
+                    p for p in shuffle
+                    if all(
+                        p[pc_id] in settings.char_settings.choices[pc_id]
+                        for pc_id in CharID
+                    )
+                )
+            except StopIteration:
+                raise ValueError(
+                    'No valid permutation for unique characters based on '
+                    'character choices.'
+                )
+            choices = {pc_id: CharID(permutation[pc_id]) for pc_id in CharID}
 
-        new_stats = [copy.deepcopy(char_man.pcs[choices[i]].stats)
-                     for i in range(7)]
+        # Get Copies of stats
+        orig_stats = {
+            pc_id: copy.deepcopy(pcstats.pc_stat_dict[pc_id])
+            for pc_id in CharID
+        }
 
-        for i in range(7):
-            orig_id = i
-            orig_lvl = char_man.pcs[i].stats.level
-            orig_tech_lvl = char_man.pcs[i].stats.tech_level
+        for pc_id in CharID:
+            reassign_id = choices[pc_id]
+            orig_level = pcstats.get_level(pc_id)
+            orig_tech_level = pcstats.get_tech_level(pc_id)
 
-            new_stats[i].set_level(orig_lvl)
-            new_stats[i].set_tech_level(orig_tech_lvl)
+            new_stats = copy.deepcopy(orig_stats[reassign_id])
+            new_stats.stat_block.char_id = pc_id
 
-            # This could be prettier.  The first byte in the stat block needs
-            # to have the pc's index in it.
-            new_stats[i].stat_block[0] = orig_id
+            pcstats.pc_stat_dict[pc_id] = new_stats
 
-            char_man.pcs[i].stats = new_stats[i]
-            char_man.pcs[i].assigned_char = choices[i]
+            pcstats.set_level(pc_id, orig_level)
+            pcstats.set_tech_level(pc_id, orig_tech_level)
+            pcstats.set_character_assignment(pc_id, reassign_id)
+
+        # Turn choices back into a list for the rest of the stuff
+        choices_list = [choices[CharID(i)] for i in range(7)]
     else:
-        choices = [i for i in range(7)]
+        choices_list = [CharID(x) for x in range(7)]
 
     dup_duals = rset.GameFlags.DUPLICATE_TECHS in settings.gameflags
-    config.techdb = get_reassign_techdb(config.techdb,
-                                        choices,
-                                        dup_duals)
+    config.tech_db = get_reassign_techdb(config.tech_db,
+                                         choices_list,
+                                         dup_duals)
 
 
 # Needs valid reassignment in config.
 def write_items_to_config(settings: rset.Settings,
                           config: cfg.RandoConfig):
-    reassign = [config.char_manager.pcs[x].assigned_char
-                for x in list(CharID)]
+    # reassign = [config.char_manager.pcs[x].assigned_char
+    #             for x in list(CharID)]
+
+    reassign = [
+        config.pcstats.get_character_assignment(CharID(i))
+        for i in range(7)
+    ]
 
     items_to_reassign = (item_id for item_id in list(ItemID)
                          if item_id < 0xBC)
     for item_id in items_to_reassign:
-        item = config.itemdb[item_id]
+        item = config.item_db[item_id]
         equippable_by = item.secondary_stats.get_equipable_by()
         equippable_by = [x for x in CharID
                          if reassign[x] in equippable_by]
@@ -471,35 +502,6 @@ def change_items_bad(from_ind, to_ind, rom,
             rom[to_use_byte] &= ~(0x80 >> to_ind)
 
 
-# One warning here.  TechDB sometimes has to move the whole stat block to make
-# room for the techs learned block.  The stat changing should happen before
-# the TechDB is written to the rom so that the changes get moved.
-# TODO: Change this function to read the stats fom a different location.  This
-#   Functionality is in the PCStats class, but it's just cumbersome.
-def reassign_stats(rom, reassign):
-
-    # All of the heavy lifting is done by PCStats class
-    orig_pcs = [PC.stats_from_rom_default(rom, i) for i in range(7)]
-    new_pcs = [copy.deepcopy(orig_pcs[reassign[i]]) for i in range(7)]
-
-    # Now each new_pc needs to be releveled/tech leveled
-    for i in range(7):
-        # correct pc index
-        new_pcs[i].stat_block[0] = i
-
-        orig_lvl = orig_pcs[i].level
-        new_pcs[i].set_level(orig_lvl)
-
-        orig_tech_lvl = orig_pcs[i].tech_level
-        new_pcs[i].set_tech_level(orig_tech_lvl)
-
-        new_pcs[i].write_to_rom_default(rom, i)
-
-    # This can probably be removed.  But to avoid potential issues with TechDB
-    # putting the stat block in bank 4F, copy the stat block to the new bank.
-    rom[0x4F0000:0x4F0000+0x230+2*7] = rom[0x0C0000:0x0C0000+0x230+2*7]
-
-
 # Each control header has indices to the associated effect headers.  The order
 # of the effect header indices matches the order of the battle group. When we
 # make a copy of a tech for a new battle group, we have to update the indices
@@ -596,6 +598,8 @@ def get_ll_prot_all(old_db):
     prot_all['gfx'][0] = 0x81
 
     prot_all['name'] = get_ct_name('Protect All')
+    prot_all['desc_ptr'] = None
+    prot_all['desc'] = b'\x00'
 
     return prot_all
 
@@ -618,6 +622,8 @@ def get_ff_hex_mist(old_db):
     hex_mist['gfx'][6] = 0x4
 
     hex_mist['name'] = get_ct_name('FlexgonMist')
+    hex_mist['desc_ptr'] = None
+    hex_mist['desc'] = b'\x00'
 
     return hex_mist
 
@@ -631,7 +637,8 @@ def get_rr_supervolt(old_db):
     sv['lrn_req'] = [8, 8, 0xFF]
     sv['mmp'] = [0x20, 0x20]
     sv['gfx'][0] = 0x83
-
+    sv['desc_ptr'] = None
+    sv['desc'] = b'\x00'
     return sv
 
 
@@ -652,7 +659,8 @@ def get_mm_haste_all(old_db):
     ha['gfx'][6] = 0x15
 
     ha['name'] = get_ct_name('Haste All')
-
+    ha['desc_ptr'] = None
+    ha['desc'] = b'\x00'
     return ha
 
 
@@ -669,7 +677,8 @@ def get_mm_glacier(old_db):
 
     gl['gfx'][0] = 0x85
     gl['name'] = get_ct_name('Glacier')
-
+    gl['desc_ptr'] = None
+    gl['desc'] = b'\x00'
     return gl
 
 
@@ -691,9 +700,10 @@ def get_ll_point_flare(old_db):
 
     pf['gfx'][0] = 0x86
     pf['gfx'][6] = 0x5D
-    
-    pf['name'] = get_ct_name('PointFlare')
 
+    pf['name'] = get_ct_name('PointFlare')
+    pf['desc_ptr'] = None
+    pf['desc'] = b'\x00'
     return pf
 
 def get_aa_beast_toss(old_db):
@@ -706,7 +716,8 @@ def get_aa_beast_toss(old_db):
 
     # This will need to change as we add more scripts
     beast_toss['gfx'][0] = 0x80
-
+    beast_toss['desc_ptr'] = None
+    beast_toss['desc'] = b'\x00'
     return beast_toss
 
 
@@ -809,6 +820,8 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
                 elif dup_duals and reassign[i] in set([0, 1, 2, 3, 4, 5]):
                     num_duals = 1
                     to_start_id = new_db.group_sizes[to_mg_ind]
+                    # Note:  We set all three combo techs to avoid issues
+                    #        looping through.  Just set some unlearnable.
                     if reassign[i] == 0:
                         # Cr-Cr X-strike (Crono Cross)
                         x_strike = old_db.get_tech(0x42)
@@ -821,6 +834,8 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
 
                         reassign_tech(x_strike, [i, j], reassign)
                         new_db.set_tech(x_strike, to_start_id)
+                        new_db.set_tech(x_strike, to_start_id+1)
+                        new_db.set_tech(x_strike, to_start_id+2)
                     elif reassign[i] == 1:
                         # Ma-Ma Haste all
                         ha = get_mm_haste_all(old_db)
@@ -830,6 +845,7 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
                         gl = get_mm_glacier(old_db)
                         reassign_tech(gl, [i, j], reassign)
                         new_db.set_tech(gl, to_start_id+1)
+                        new_db.set_tech(gl, to_start_id+2)
 
                         num_duals = 2
                     elif reassign[i] == 2:
@@ -842,6 +858,7 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
                         pf = get_ll_point_flare(old_db)
                         reassign_tech(pf, [i, j], reassign)
                         new_db.set_tech(pf, to_start_id+1)
+                        new_db.set_tech(pf, to_start_id+2)
 
                         num_duals = 2
                     elif reassign[i] == 3:
@@ -849,22 +866,28 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
                         sv = get_rr_supervolt(old_db)
                         reassign_tech(sv, [i, j], reassign)
                         new_db.set_tech(sv, to_start_id)
+                        new_db.set_tech(sv, to_start_id+1)
+                        new_db.set_tech(sv, to_start_id+2)
                     elif reassign[i] == 4:
                         # Fr-Fr Hex Mist
                         hex_mist = get_ff_hex_mist(old_db)
                         reassign_tech(hex_mist, [i, j], reassign)
                         new_db.set_tech(hex_mist, to_start_id)
+                        new_db.set_tech(hex_mist, to_start_id+1)
+                        new_db.set_tech(hex_mist, to_start_id+2)
                     elif reassign[i] == 5:
                         # Ayla-Ayla Beast Toss
 
                         beast_toss = get_aa_beast_toss(old_db)
                         reassign_tech(beast_toss, [i, j], reassign)
                         new_db.set_tech(beast_toss, to_start_id)
+                        new_db.set_tech(beast_toss, to_start_id+1)
+                        new_db.set_tech(beast_toss, to_start_id+2)
 
                     # Make the rest unlearnable
                     for k in range(num_duals, 3):
-                        id = to_start_id + k
-                        new_db.controls[id*TechDB.control_size] |= 0x80
+                        tid = to_start_id + k
+                        new_db.controls[tid*TechDB.control_size] |= 0x80
                 else:
                     to_start_id = new_db.group_sizes[to_mg_ind]
 
@@ -872,9 +895,8 @@ def update_dual_techs(old_db, new_db, reassign, dup_duals):
                           % (to_mg_ind, to_mg_ind+2))
 
                     for k in range(3):
-                        id = to_start_id + k
-
-                        new_db.controls[id*TechDB.control_size] |= 0x80
+                        tid = to_start_id + k
+                        new_db.controls[tid*TechDB.control_size] |= 0x80
 
                 continue
 
@@ -1022,7 +1044,7 @@ def update_rock_techs(rom, db, reassign):
     # Unless that would be negative...
     num_rock_techs = len(db.menu_grps) - db.first_rock_grp
     clear_num = 0
-    if(num_rock_techs < 3):
+    if num_rock_techs < 3:
         clear_num = 0
     else:
         clear_num = num_rock_techs - 3
@@ -1360,7 +1382,7 @@ def reassign_pc_magic(from_ind, to_ind, rom, db, magic_thresh):
     # applied when this option is selected
 
 
-def get_reassign_techdb(orig_db, reassign, dup_duals=False):
+def get_reassign_techdb(orig_db, reassign: List[CharID], dup_duals=False):
     # Make a db with the right menu/battle groups but no techs added yet
     new_db = max_expand_empty_db(orig_db, reassign, dup_duals)
 
@@ -1375,6 +1397,7 @@ def get_reassign_techdb(orig_db, reassign, dup_duals=False):
     # hardcode the new starts for the db here.  I have the free space manager
     # but integrating it with the rest of the randomizer is an ordeal.
     # Should be max 0xFE techs now?  Should never exceed 0x9A.
+    # Actually it's 0x9B because tech0 is fake.
 
     new_db.control_start = 0x5F0000
     new_db.effect_start = 0x5F1000
@@ -1382,11 +1405,13 @@ def get_reassign_techdb(orig_db, reassign, dup_duals=False):
     new_db.target_start = 0x5f3000
     new_db.bat_grp_start = 0x5F3200
     new_db.menu_grp_start = 0x5F3500
+
+    # Names are 0xB bytes long, so we can have 0xB*0x9B = 0x6A9 bytes
     new_db.name_start = 0x5F4000
 
     # new_db.desc_new_start = 0x5F5100
-    new_db.set_desc_start(0x5F5100)
-    new_db.desc_ptr_start = 0x5F4600
+    new_db.set_desc_start(0x5F4A00)
+    new_db.desc_ptr_start = 0x5F4800
 
     new_db.techs_learned_start = 0x4F0230
 
@@ -2167,7 +2192,7 @@ def extend_techs(rom):
 
 def fix_kings_trial_anim(ctrom: CTRom, config: cfg.RandoConfig):
 
-    marle_assign = config.char_manager.pcs[CharID.MARLE].assigned_char
+    marle_assign = config.pcstats.get_character_assignment(CharID.MARLE)
     if marle_assign == CharID.MARLE:
         return
 
@@ -2185,9 +2210,6 @@ def fix_kings_trial_anim(ctrom: CTRom, config: cfg.RandoConfig):
     end = trial_event.get_function_end(0x02, 0x06)
 
     pos = trial_event.find_exact_command(bad_anim_cmd, start, end)
-
-    if pos is None:
-        print(f"Error: Can not find {bad_anim_cmd} (fix_kings_trial_anim)")
 
     # Just overwrite with the new command
     trial_event.data[pos:pos+len(bad_anim_cmd)] = \
@@ -2223,8 +2245,11 @@ def reassign_characters_on_ctrom(ctrom: CTRom, config: cfg.RandoConfig):
     space_man.mark_block((0x5F0000, 0x600000), mark_used)
 
     # Have to rebuild reassign list to match original format
-    reassign = [config.char_manager.pcs[i].assigned_char for i in range(7)]
-    new_db = config.techdb
+    reassign = [
+        config.pcstats.get_character_assignment(CharID(i))
+        for i in range(7)
+    ]
+    new_db = config.tech_db
     TechDB.write_db_internal(new_db, rom)
 
     reassign_tech_refs(rom, new_db, reassign)

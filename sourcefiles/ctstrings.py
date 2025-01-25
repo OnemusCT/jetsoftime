@@ -4,8 +4,15 @@
 from __future__ import annotations
 
 import pickle
+import typing
+
+from pathlib import Path
 
 import byteops
+
+
+class InvalidSymbolException(Exception):
+    '''Raise when an invalid symbol is passed to a CTString.'''
 
 
 class Node:
@@ -13,7 +20,7 @@ class Node:
     def __init__(self):
         self.held_substring = None
         self.held_substring_index = None
-        self.children = dict()
+        self.children = {}
 
     def print_tree(self):
 
@@ -103,18 +110,17 @@ class CTHuffmanTree:
             (substr, match_len) = self.match_r(string,
                                                pos+1,
                                                node.children[string[pos]])
-
             if substr is not None:
                 return substr, match_len + 1
-            else:
-                return node.held_substring_index, 0
-        else:
             return node.held_substring_index, 0
+        return node.held_substring_index, 0
 
 
 # CTString extends bytearray because it is just a bytearray with a few extra
 # methods for converting to python string and compression.
 class CTString(bytearray):
+
+    _pickles_path: Path = Path(__file__).parent / 'pickles'
 
     # This list might not be exactly right.  I need to encounter each keyword
     # in a flux file before I know exactly what name flux uses.
@@ -138,12 +144,12 @@ class CTString(bytearray):
     ]
 
     symbols = [
-        '!', '?', '/', '\"1', '\"2', ':', '&', '(', ')', '\'', '.',
-        ',', '=', '-', '+', '%', 'note', ' ', '{:heart:}', '...',
+        '!', '?', '/', '{\"1}', '{\"2}', ':', '&', '(', ')', '\'', '.',
+        ',', '=', '-', '+', '%', '{note}', ' ', '{:heart:}', '...',
         '{:inf:}', 'none'
     ]
 
-    huffman_table = pickle.load(open('./pickles/huffman_table.pickle', 'rb'))
+    huffman_table = pickle.load(Path(_pickles_path / 'huffman_table.pickle').open('rb'))
     huffman_tree = CTHuffmanTree(huffman_table)
 
     # There's nothing special that we do for CTStrings.
@@ -167,7 +173,7 @@ class CTString(bytearray):
         return ct_str
 
     @classmethod
-    def get_token(cls, string: str, pos: int) -> (bytes, int):
+    def get_token(cls, string: str, pos: int) -> typing.Tuple[bytes, int]:
         '''
         Gets the next byte of data for a ct string.  Returns that byte and the
         position of where the byte after begins.
@@ -192,10 +198,10 @@ class CTString(bytearray):
             # Symbols (see CTString.symbols) are in range(0xDE, 0xE
             ct_char = CTString.symbols.index(char) + 0xDE
             length = 1
-        elif char == '\"':
-            quote_str = string[pos:pos+2]
-            ct_char = CTString.symbols.index(quote_str) + 0xDE
-            length = 2
+        # elif char == '\"':
+        #     quote_str = string[pos:pos+2]
+        #     ct_char = CTString.symbols.index(quote_str) + 0xDE
+        #     length = 2
         elif char == '{':
             # '{' marks the start of a keyword like Crono's name or an item.
             # CTString.keywords has all of these listed.
@@ -221,22 +227,20 @@ class CTString(bytearray):
                    end+2 < len(string) and \
                    string[end:end+2] == '\r\n':
                     length += 2
-            elif keyword in CTString.symbols:
+            elif f'{{{keyword}}}' in CTString.symbols:
                 # quotation marks are in there too as {"1} and {"2}
-                ct_char = CTString.symbols.index(keyword) + 0xDE
+                ct_char = CTString.symbols.index(f'{{{keyword}}}') + 0xDE
             elif keyword.split(' ')[0] == 'delay':
                 vals = [0x03, int(keyword.split(' ')[1], 16)]
                 ct_bytes = bytes(vals)
             else:
                 print(keyword.split(' ')[0])
-                print(f"unknown keyword \'{keyword}\'")
-                exit()
+                raise ValueError(f"unknown keyword \'{keyword}\'")
         elif char == '\r' and pos+1 < len(string) and string[pos+1] == '\n':
             length = 2
             ct_char = 5
         else:
-            print(f"unknown symbol \'{char}\'")
-            exit()
+            raise ValueError(f"unknown symbol \'{char}\'")
 
         # print(f"char={char}, pos={pos}, ctchar={ct_char:02X}")
         # returning new position instead of length so that we can do things
@@ -252,7 +256,7 @@ class CTString(bytearray):
         ret_str = CTString()
 
         pos = 0
-        while pos < len(string): 
+        while pos < len(string):
             (ct_bytes, pos) = cls.get_token(string, pos)
             ret_str.extend(ct_bytes)
 
@@ -276,7 +280,10 @@ class CTString(bytearray):
     def ct_bytes_to_ascii(cls, array: bytes):
         return CTString(array).to_ascii()
 
-    def to_ascii(self, techname=False):
+    def __str__(self):
+        return self.to_ascii(False)
+
+    def to_ascii(self, techname=False) -> str:
         '''Turns this CTString into a python string'''
 
         ret_str = ''
@@ -310,16 +317,15 @@ class CTString(bytearray):
                 ret_str += f"{cur_byte-0xD4}"
             elif cur_byte in range(0xDE, 0xF4):
                 symbol = self.symbols[cur_byte-0xDE]
-                if symbol in ('note', '\"1', '\"2'):
-                    symbol = '{' + symbol + '}'
+                # if symbol in ('note', '\"1', '\"2'):
+                #     symbol = '{' + symbol + '}'
                 ret_str += symbol
             elif cur_byte == 0xFF:
                 # enemies edited in TF seem to get FFs in their names
                 ret_str += ' '
             else:
                 ret_str += '[:bad:]'
-                print(f"Bad byte: {cur_byte:02X}")
-                exit()
+                raise ValueError(f"Bad byte: {cur_byte:02X}")
 
             pos += 1
 
@@ -350,9 +356,9 @@ class CTNameString(bytearray):
         0x32: '{boxtl}',
         0x33: '{boxbr}',
         0x34: '+',
-        # There are more, but weird capital versions that dont come up.
-        0xDE: '!', 0xDF: '?', 0xE0: '/', 0xE1: '\"1', 0xE2: '\"2', 0xE3: ':',
-        0xE4: '&', 0xE5: '(', 0xE6: ')', 0xE7: '\'', 0xE8: '.',
+        # There are more, but weird capital versions that don't come up.
+        0xDE: '!', 0xDF: '?', 0xE0: '/', 0xE1: '{\"1}', 0xE2: '{\"2}',
+        0xE3: ':', 0xE4: '&', 0xE5: '(', 0xE6: ')', 0xE7: '\'', 0xE8: '.',
         0xE9: ',', 0xEA: '=', 0xEB: '-', 0xEC: '+', 0xED: '%',
         0xEE: '{noneEE}', 0xEF: '{endpadEF}', 0xF0: '{:heart:}',
         0xFF: ' '
@@ -370,8 +376,44 @@ class CTNameString(bytearray):
     symbol_to_byte_dict = {value: key
                            for (key, value) in byte_to_symbol_dict.items()}
 
+    def __init__(self, *args, fix_ef: bool = True, **kwargs):
+        '''
+        Construct a CTNameString.
+
+        Internally, this is juts a bytearray, so all arguments passed to
+        bytearray.__init__ are valid.  CTNameString adds the following kwargs:
+        - fix_ef: bool = True
+            Some of CT's tech names are bugged because they use 0xEF as a space
+            instead of 0xFF.  Notable examples are Ice Sword(\xEF)2 and
+            Firesword(\xEF)2.  This causes the game to read them as 'Ice Sword'
+            and 'Firesword' because in some contexts 0xEF is used as  a
+            terminator.
+
+            With fix_ef=True, all 0xEFs except for ones at the end of the
+            string are replaced with 0xFFs.  Any terminal 0xFFs are also
+            replaced by 0xEFs.
+        '''
+        bytearray.__init__(self, *args, **kwargs)
+
+        if fix_ef:
+            self[:] = self[:].rstrip(b'\xEF\xFF').replace(b'\xEF', b'\xFF')\
+                .ljust(len(self), b'\xEF')
+
     @classmethod
     def from_string(cls, string: str, length: int = 0xB, pad_val: int = 0xEF):
+        '''
+        Construct a CTNameString from a python string.
+
+        parameters:
+        - string: str
+            The string to convert into a CTNameString
+        - length: int = 0xB
+            The length of the CTNameString to be produced.  If the result
+            would exceed this length, the result is truncated.
+        - pad_val: int=0xEF
+            If the result falls short of length, pad the end (ljust) with
+            pad_val
+        '''
         str_pos = 0
 
         ct_bytes = bytearray()
@@ -385,26 +427,30 @@ class CTNameString(bytearray):
                     break
 
             if not found:
-                raise ValueError(string[str_pos:])
+                raise InvalidSymbolException(string[str_pos:])
 
         if len(ct_bytes) > length:
-            ct_bytes = ct_bytes[0:length+1]
-        elif len(ct_bytes) < length:
-            ct_bytes.extend([pad_val for x in range(length-len(ct_bytes))])
+            ct_bytes = ct_bytes[0:length]
 
-        pos = len(ct_bytes) - 1
-        while pos >= 0 and ct_bytes[pos] == 0xFF:
-            ct_bytes[pos] = pad_val
-            pos -= 1
+        # elif len(ct_bytes) < length:
+        #     ct_bytes.extend([pad_val for x in range(length-len(ct_bytes))])
 
+        # pos = len(ct_bytes) - 1
+        # while pos >= 0 and ct_bytes[pos] == 0xFF:
+        #     ct_bytes[pos] = pad_val
+        #     pos -= 1
+
+        # return CTNameString(ct_bytes)
+
+        pad_bytes = bytes([pad_val])
+        ct_bytes = ct_bytes.rstrip(b'\xEF\xFF').replace(b'\xEF', b'\xFF')\
+            .ljust(length, pad_bytes)
         return CTNameString(ct_bytes)
 
     def __str__(self):
-        try:
-            ind = self.index(0xEF)
-        except ValueError:
-            ind = len(self)
-        string = ''.join(self.byte_to_symbol_dict[x] for x in self[0:ind])
+        stripped_ctstr = self.rstrip(b'\xEF').replace(b'\xEF', b'\xFF')
+        string = ''.join(self.byte_to_symbol_dict[x]
+                         for x in stripped_ctstr)
         return string
 
 

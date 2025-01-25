@@ -1,15 +1,20 @@
 import typing
+from typing import List, Optional, Type
 from math import ceil
 
+import ctenums
 from logictypes import BaselineLocation, Location, LocationGroup,\
     LinkedLocation, Game
-import treasuredata as td
+from treasures import treasuredata as td
 
 from ctenums import TreasureID as TID, CharID as Characters, ItemID, \
     RecruitID
 import randosettings as rset
 import randoconfig as cfg
 
+
+class ImpossibleGameConfigException(Exception):
+    pass
 
 #
 # The LogicFactory is used by the logic writer to get a GameConfig
@@ -35,13 +40,14 @@ class GameConfig:
     def __init__(self,
                  settings: rset.Settings,
                  config: cfg.RandoConfig):
-        self.keyItemList = []
+        self.keyItemList: list[ItemID] = []
         self.locationGroups: list[LocationGroup] = []
         self.settings = settings
         self.config = config
-        self.game = None
+        self.game: Game
         self.initLocations()
         self.initKeyItems()
+        self.resolveExtraKeyItems()
         self.initGame()
 
     #
@@ -50,6 +56,15 @@ class GameConfig:
     #
     def initLocations(self):
         raise NotImplementedError()
+
+
+    #
+    # Subclasses will override this method to
+    # handle the case that more key items than spots exist
+    #
+    def resolveExtraKeyItems(self):
+        raise NotImplementedError()
+
 
     #
     # Subclasses will override this method to
@@ -89,7 +104,7 @@ class GameConfig:
     #
     # return: The LocationGroup object with the given name
     #
-    def getLocationGroup(self, name: str) -> LocationGroup:
+    def getLocationGroup(self, name: str) -> Optional[LocationGroup]:
         try:
             return next(x for x in self.locationGroups
                         if x.name == name)
@@ -190,7 +205,7 @@ class ChronosanityGameConfig(GameConfig):
             .addLocation(Location(TID.ARRIS_DOME_RATS))
             .addLocation(Location(TID.ARRIS_DOME_FOOD_STORE))
             # KeyItems
-            .addLocation(Location(TID.ARRIS_DOME_KEY))
+            .addLocation(Location(TID.ARRIS_DOME_DOAN_KEY))
             .addLocation(Location(TID.SUN_PALACE_KEY))
         )
 
@@ -240,8 +255,10 @@ class ChronosanityGameConfig(GameConfig):
             .addLocation(Location(TID.GENO_DOME_KEY))
         )
 
+        # Changing this from access future to access proto because of Vanilla
+        # mode/extended keys.
         factoryLocations = \
-            LocationGroup("Factory", 30, lambda game: game.canAccessFuture())
+            LocationGroup("Factory", 30, lambda game: game.canAccessProtoDome())
         (
             factoryLocations
             .addLocation(Location(TID.FACTORY_LEFT_AUX_CONSOLE))
@@ -267,7 +284,7 @@ class ChronosanityGameConfig(GameConfig):
                           lambda game: game.canAccessGiantsClaw())
         (
             giantsClawLocations
-            .addLocation(Location(TID.GIANTS_CLAW_KINO_CELL))
+            # .addLocation(Location(TID.GIANTS_CLAW_KINO_CELL))
             .addLocation(Location(TID.GIANTS_CLAW_TRAPS))
             .addLocation(Location(TID.GIANTS_CLAW_CAVES_1))
             .addLocation(Location(TID.GIANTS_CLAW_CAVES_2))
@@ -308,8 +325,8 @@ class ChronosanityGameConfig(GameConfig):
 
         # Guardia Treasury
         guardiaTreasuryLocations = \
-            LocationGroup("GuardiaTreasury", 36,
-                          lambda game: game.canAccessKingsTrial())
+            LocationGroup("GuardiaTreasury", 30,
+                          lambda game: game.hasKeyItem(ctenums.ItemID.PRISMSHARD))
         (
             guardiaTreasuryLocations
             .addLocation(Location(TID.GUARDIA_BASEMENT_1))
@@ -318,8 +335,11 @@ class ChronosanityGameConfig(GameConfig):
             .addLocation(Location(TID.GUARDIA_TREASURY_1))
             .addLocation(Location(TID.GUARDIA_TREASURY_2))
             .addLocation(Location(TID.GUARDIA_TREASURY_3))
-            .addLocation(Location(TID.KINGS_TRIAL_KEY))
         )
+
+        guardiaTreasuryKeyLocations = \
+            LocationGroup("KingsTrialKey", 6,
+                          lambda game: game.canAccessKingsTrial())
 
         # Ozzie's Fort locations
         # Ozzie's fort is a high level location.
@@ -573,6 +593,7 @@ class ChronosanityGameConfig(GameConfig):
         self.locationGroups.append(northernRuinsLocations)
         self.locationGroups.append(northernRuinsFrogLocked)
         self.locationGroups.append(guardiaTreasuryLocations)
+        self.locationGroups.append(guardiaTreasuryKeyLocations)
         self.locationGroups.append(openLocations)
         self.locationGroups.append(openKeys)
         self.locationGroups.append(heckranLocations)
@@ -594,6 +615,109 @@ class ChronosanityGameConfig(GameConfig):
         # Sealed Locations (chests and doors)
         self.locationGroups.append(sealedLocations)
 
+        flags = self.settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.ADD_SUNKEEP_SPOT in flags:
+            sunstoneKey = LocationGroup(
+                "Sun Keep 2300", 1,
+                lambda game: (
+                    game.hasKeyItem(ItemID.GATE_KEY) and
+                    game.hasKeyItem(ItemID.PENDANT) and
+                    game.hasKeyItem(ItemID.MOON_STONE)
+                )
+            )
+
+            sunstoneKey.addLocation(Location(TID.SUN_KEEP_2300))
+            self.locationGroups.append(sunstoneKey)
+
+        if GF.ADD_BEKKLER_SPOT in flags:
+            bekklerKey = LocationGroup(
+                "BekklersLab", 2,
+                lambda game: game.hasKeyItem(ItemID.C_TRIGGER))
+            bekklerKey.addLocation(Location(TID.BEKKLER_KEY))
+
+            self.locationGroups.append(bekklerKey)
+
+        if GF.ADD_CYRUS_SPOT in flags:
+            northernRuinsLocations = self.getLocationGroup('NorthernRuins')
+            northernRuinsLocations.accessRule = _canAccessNorthernRuinsVR
+
+            northernRuinsFrog = self.getLocationGroup(
+                'NorthernRuinsFrogLocked')
+            northernRuinsFrog.addLocation(Location(TID.CYRUS_GRAVE_KEY))
+            northernRuinsFrog.accessRule = _canAccessCyrusGraveVR
+
+        if GF.ADD_OZZIE_SPOT in flags:
+            ozziesFort = self.getLocationGroup("Ozzie's Fort")
+            ozziesFort.locations.append(Location(TID.OZZIES_FORT_KEY))
+            self.locationGroups.append(ozziesFort)
+
+        if GF.ADD_RACELOG_SPOT in flags:
+            lab32Key = LocationGroup(
+                "RaceLog Chest", 2,
+                lambda game: (
+                    game.hasKeyItem(ItemID.PENDANT) and
+                    game.hasKeyItem(ItemID.BIKE_KEY)
+                )
+            )
+            lab32Key.addLocation(Location(TID.LAB_32_RACE_LOG))
+            self.locationGroups.append(lab32Key)
+
+        if GF.SPLIT_ARRIS_DOME in flags:
+            future = self.getLocationGroup("FutureOpen")
+            future.removeLocationTIDs(TID.ARRIS_DOME_DOAN_KEY)
+            future.addLocation(Location(TID.ARRIS_DOME_FOOD_LOCKER_KEY))
+
+            doanKey = LocationGroup("DoanSeed", 1, _canAccessDoanKeyVR)
+            doanKey.addLocation(Location(TID.ARRIS_DOME_DOAN_KEY))
+            self.locationGroups.append(doanKey)
+
+        if GF.VANILLA_DESERT in flags:
+            fiona_shrine = self.getLocationGroup('Fionashrine')
+            fiona_shrine.accessRule = _canAccessFionasShrineVR
+
+        if GF.ROCKSANITY in flags:
+            self.initLocationsRocksanity()
+
+    def initLocationsRocksanity(self):
+        # add rock to existing Denadoro locations
+        denadoro = self.getLocationGroup('DenadoroLocations')
+        denadoro.weight += 1
+        denadoro.addLocation(Location(TID.DENADORO_ROCK))
+
+        # add rock to existing Giants Claw locations
+        giantsclaw = self.getLocationGroup('Giantsclaw')
+        giantsclaw.weight += 3
+        giantsclaw.addLocation(Location(TID.GIANTS_CLAW_ROCK))
+
+        # laruba
+        larubaRock = LocationGroup(
+            "Laruba Rock", 5, lambda game: game.canAccessPrehistory()
+        )
+        larubaRock.addLocation(Location(TID.LARUBA_ROCK))
+
+        # kajar
+        kajarRock = LocationGroup(
+            "Kajar Rock", 5, lambda game: game.canAccessMtWoe()
+        )
+        kajarRock.addLocation(Location(TID.KAJAR_ROCK))
+
+        self.locationGroups.extend([larubaRock, kajarRock])
+
+        if _couldAccessBlackOmen(self):
+            # black omen rock set up to prevent putting go-mode items there
+            blackOmenRock = LocationGroup(
+                "Black Omen Rock", 1, lambda game: (
+                    game.canAccessBlackOmen() and
+                    game.canAccessMagusCastle() and
+                    game.canAccessTyranoLair()
+                )
+            )
+            blackOmenRock.addLocation(Location(TID.BLACK_OMEN_TERRA_ROCK))
+            self.locationGroups.append(blackOmenRock)
+
+
     def initKeyItems(self):
         # NOTE:
         # The initial list of key items contains multiples of most of the key
@@ -607,7 +731,31 @@ class ChronosanityGameConfig(GameConfig):
 
         # Seed the list with 5 copies of each item
         # keyItemList = [key for key in (KeyItems)]
-        keyItemList = ItemID.get_key_items()
+        keyItemList = [
+            ItemID.GATE_KEY, ItemID.DREAMSTONE, ItemID.RUBY_KNIFE,
+            ItemID.PENDANT, ItemID.C_TRIGGER, ItemID.CLONE,
+            ItemID.BENT_HILT, ItemID.BENT_SWORD, ItemID.MASAMUNE_2,
+            ItemID.HERO_MEDAL, ItemID.ROBORIBBON, ItemID.PRISMSHARD,
+            ItemID.TOMAS_POP, ItemID.MOON_STONE, ItemID.JERKY
+        ]
+
+        if rset.GameFlags.EPOCH_FAIL in self.settings.gameflags:
+            keyItemList.append(ItemID.JETSOFTIME)
+
+        if rset.GameFlags.ADD_SUNKEEP_SPOT in self.settings.gameflags:
+            keyItemList.append(ItemID.SUN_STONE)
+
+        if rset.GameFlags.RESTORE_TOOLS in self.settings.gameflags:
+            keyItemList.append(ItemID.TOOLS)
+
+        if rset.GameFlags.RESTORE_JOHNNY_RACE in self.settings.gameflags:
+            keyItemList.append(ItemID.BIKE_KEY)
+
+        if rset.GameFlags.SPLIT_ARRIS_DOME in self.settings.gameflags:
+            keyItemList.append(ItemID.SEED)
+
+        if rset.GameFlags.VANILLA_ROBO_RIBBON in self.settings.gameflags:
+            keyItemList.remove(ItemID.ROBORIBBON)
 
         # keyItemList ends up with 5 of each key item except for
         # lateProgression items
@@ -629,6 +777,13 @@ class ChronosanityGameConfig(GameConfig):
         keyItemList.extend([ItemID.GATE_KEY, ItemID.GATE_KEY, ItemID.GATE_KEY,
                             ItemID.PENDANT, ItemID.PENDANT, ItemID.PENDANT])
 
+        # Add all 5 rocks if Rocksanity used with all Chronosanity modes
+        if rset.GameFlags.ROCKSANITY in self.settings.gameflags:
+            keyItemList.extend([
+                ItemID.BLACK_ROCK, ItemID.BLUE_ROCK, ItemID.GOLD_ROCK,
+                ItemID.SILVERROCK, ItemID.WHITE_ROCK
+            ])
+
         self.keyItemList = keyItemList
     # end initKeyItems
 
@@ -647,6 +802,10 @@ class ChronosanityGameConfig(GameConfig):
             return newList
         else:
             return keyItemList
+
+    # Chronosanity always has enough spots for items.
+    def resolveExtraKeyItems(self):
+        pass
 
 # end ChronosanityGameConfig class
 
@@ -670,6 +829,9 @@ class ChronosanityLostWorldsGameConfig(GameConfig):
         # being applied to the Lost Worlds key items
         self.keyItemList = [ItemID.C_TRIGGER, ItemID.CLONE, ItemID.PENDANT,
                             ItemID.DREAMSTONE, ItemID.RUBY_KNIFE]
+
+    def resolveExtraKeyItems(self):
+        pass
 
     def initLocations(self):
 
@@ -742,7 +904,7 @@ class ChronosanityLostWorldsGameConfig(GameConfig):
             .addLocation(Location(TID.ARRIS_DOME_RATS))
             .addLocation(Location(TID.ARRIS_DOME_FOOD_STORE))
             # KeyItems
-            .addLocation(Location(TID.ARRIS_DOME_KEY))
+            .addLocation(Location(TID.ARRIS_DOME_DOAN_KEY))
             .addLocation(Location(TID.SUN_PALACE_KEY))
         )
 
@@ -862,7 +1024,7 @@ def apply_epoch_fail(game_config: GameConfig):
     if rset.GameFlags.EPOCH_FAIL not in settings.gameflags:
         return
 
-    flight_tids = (
+    flight_tids = [
         # Sun Palace
         TID.SUN_PALACE_KEY,
         # Geno Dome
@@ -875,7 +1037,7 @@ def apply_epoch_fail(game_config: GameConfig):
         TID.GIANTS_CLAW_CAVES_1, TID.GIANTS_CLAW_CAVES_2,
         TID.GIANTS_CLAW_CAVES_3, TID.GIANTS_CLAW_CAVES_4,
         TID.GIANTS_CLAW_CAVES_5, TID.GIANTS_CLAW_KEY,
-        TID.GIANTS_CLAW_TRAPS, TID.GIANTS_CLAW_KINO_CELL,
+        TID.GIANTS_CLAW_TRAPS, # TID.GIANTS_CLAW_KINO_CELL,
         TID.GIANTS_CLAW_THRONE_1, TID.GIANTS_CLAW_THRONE_2,
         # Northern Ruins
         TID.NORTHERN_RUINS_ANTECHAMBER_LEFT_1000,
@@ -892,14 +1054,32 @@ def apply_epoch_fail(game_config: GameConfig):
         TID.OZZIES_FORT_FINAL_1, TID.OZZIES_FORT_FINAL_2,
         TID.OZZIES_FORT_GUILLOTINES_1, TID.OZZIES_FORT_GUILLOTINES_2,
         TID.OZZIES_FORT_GUILLOTINES_3, TID.OZZIES_FORT_GUILLOTINES_4,
+        TID.OZZIES_FORT_KEY,
         # OpenKeys
         TID.LAZY_CARPENTER,
         # MelchiorRefinements
         TID.MELCHIOR_KEY
-    )
+    ]
+
+    # When the Sun Keep spot is in, the Sun Keep needs flight but Melchior
+    # no longer requires flight.
+    if rset.GameFlags.ADD_SUNKEEP_SPOT in settings.gameflags:
+        flight_tids.append(TID.SUN_KEEP_2300)
+        flight_tids.remove(TID.MELCHIOR_KEY)
+
+    if rset.GameFlags.ROCKSANITY in settings.gameflags:
+        flight_tids.append(TID.GIANTS_CLAW_ROCK)
 
     def add_flight(func):
-        return lambda game: func(game) and game.hasKeyItem(ItemID.JETSOFTIME)
+
+        def ret_func(game: Game):
+            settings = game.settings
+            if rset.GameFlags.UNLOCKED_SKYGATES in settings.gameflags:
+                return (func(game) and game.hasKeyItem(ItemID.JETSOFTIME) and
+                        game.canAccessEndOfTime())
+            return func(game) and game.hasKeyItem(ItemID.JETSOFTIME)
+
+        return ret_func
 
     new_groups = []
     for group in game_config.locationGroups:
@@ -942,30 +1122,6 @@ def apply_epoch_fail(game_config: GameConfig):
 
     game_config.locationGroups.extend(new_groups)
 
-    # Make sure that JoT gets added to the key item list, and that something
-    # gets removed when there's no room.  For now, we're just always going
-    # to remove Jerky.  An alternate idea would be to make Jerky a KI check?
-    if rset.GameFlags.CHRONOSANITY in settings.gameflags:
-        for temp in range(3):
-            game_config.keyItemList.append(ItemID.JETSOFTIME)
-    else:
-        # Vanilla Rando has extra KI spots, and IA has fewer KIs.
-        # For other modes, trade out Jerky for Jets
-
-        # LoC has a free KI spot if locked char is on, otherwise it needs
-        # something (jerky) removed.
-        loc_remove_jerky = (
-            settings.game_mode == rset.GameMode.LEGACY_OF_CYRUS and
-            rset.GameFlags.LOCKED_CHARS in settings.gameflags
-        )
-
-        if settings.game_mode == rset.GameMode.STANDARD or \
-           loc_remove_jerky:
-            game_config.keyItemList.remove(ItemID.JERKY)
-
-        game_config.keyItemList.append(ItemID.JETSOFTIME)
-
-
 #
 # This class represents the game configuration for a
 # Normal game.
@@ -982,7 +1138,57 @@ class NormalGameConfig(GameConfig):
         self.game = Game(self.settings, self.config)
 
     def initKeyItems(self):
-        self.keyItemList = ItemID.get_key_items()
+        IID = ItemID
+        self.keyItemList = [
+            IID.GATE_KEY, IID.DREAMSTONE, IID.RUBY_KNIFE,
+            IID.PENDANT, IID.C_TRIGGER, IID.CLONE,
+            IID.BENT_HILT, IID.BENT_SWORD, IID.MASAMUNE_2,
+            IID.HERO_MEDAL, IID.ROBORIBBON, IID.PRISMSHARD,
+            IID.TOMAS_POP, IID.MOON_STONE, IID.JERKY
+        ]
+
+        if rset.GameFlags.EPOCH_FAIL in self.settings.gameflags:
+            self.keyItemList.append(ItemID.JETSOFTIME)
+
+        if rset.GameFlags.ADD_SUNKEEP_SPOT in self.settings.gameflags:
+            self.keyItemList.append(IID.SUN_STONE)
+
+        if rset.GameFlags.RESTORE_TOOLS in self.settings.gameflags:
+            self.keyItemList.append(IID.TOOLS)
+
+        if rset.GameFlags.RESTORE_JOHNNY_RACE in self.settings.gameflags:
+            self.keyItemList.append(ItemID.BIKE_KEY)
+
+        if rset.GameFlags.SPLIT_ARRIS_DOME in self.settings.gameflags:
+            self.keyItemList.append(ItemID.SEED)
+
+        if rset.GameFlags.VANILLA_ROBO_RIBBON in self.settings.gameflags:
+            self.keyItemList.remove(ItemID.ROBORIBBON)
+
+        # add all 5 rocks as KI for all 5 rock locations when Rocksanity used
+        if rset.GameFlags.ROCKSANITY in self.settings.gameflags:
+            self.keyItemList.extend([
+                ItemID.BLACK_ROCK, ItemID.BLUE_ROCK, ItemID.GOLD_ROCK,
+                ItemID.SILVERROCK, ItemID.WHITE_ROCK
+            ])
+
+    def resolveExtraKeyItems(self):
+        num_spots = sum(
+            len(group.locations) for group in self.locationGroups
+        )
+        num_keys = len(self.keyItemList)
+
+        if num_spots >= num_keys:
+            return
+
+        if ItemID.JERKY in self.keyItemList:
+            self.keyItemList.remove(ItemID.JERKY)
+            num_keys -= 1
+
+        if num_spots >= num_keys:
+            return
+
+        raise ImpossibleGameConfigException
 
     def initLocations(self):
 
@@ -1080,7 +1286,8 @@ class NormalGameConfig(GameConfig):
         )
         (
             futureKeys
-            .addLocation(BaselineLocation(TID.ARRIS_DOME_KEY, high_dist))
+            .addLocation(BaselineLocation(TID.ARRIS_DOME_DOAN_KEY,
+                                          high_dist))
             .addLocation(BaselineLocation(TID.SUN_PALACE_KEY, high_dist))
             .addLocation(BaselineLocation(TID.GENO_DOME_KEY, awesome_dist))
         )
@@ -1099,18 +1306,144 @@ class NormalGameConfig(GameConfig):
         # 2300
         self.locationGroups.append(futureKeys)
 
+        flags = self.settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.ADD_SUNKEEP_SPOT in flags:
+            sunstoneKey = LocationGroup(
+                "Sun Keep 2300", 1,
+                lambda game: (
+                    game.canAccessPrehistory() and
+                    game.canAccessFuture() and
+                    game.hasKeyItem(ItemID.MOON_STONE)
+                )
+            )
+            sunstoneKey.addLocation(BaselineLocation(TID.SUN_KEEP_2300,
+                                                     _high_gear_dist))
+            self.locationGroups.append(sunstoneKey)
+
+        if GF.ADD_BEKKLER_SPOT in flags:
+            bekklerKey = LocationGroup(
+                "BekklersLab", 1,
+                lambda game: game.hasKeyItem(ItemID.C_TRIGGER)
+            )
+            bekklerKey.addLocation(
+                BaselineLocation(TID.BEKKLER_KEY, _awesome_gear_dist)
+            )
+            self.locationGroups.append(bekklerKey)
+
+        if GF.ADD_CYRUS_SPOT in flags:
+            cyrusKey = LocationGroup(
+                "HerosGrave", 1, _canAccessCyrusGraveVR
+            )
+            cyrusKey.addLocation(
+                BaselineLocation(TID.CYRUS_GRAVE_KEY, _awesome_gear_dist)
+            )
+            self.locationGroups.append(cyrusKey)
+
+        if GF.ADD_OZZIE_SPOT in flags:
+            # Logically, Ozzie's fort is gated behind EoT/Woe access, but
+            # players can physically enter once they can fly there.
+            ozzieKey = LocationGroup("Ozzie's Fort", 1,
+                                     lambda game: game.canAccessMtWoe())
+            ozzieKey.addLocation(BaselineLocation(TID.OZZIES_FORT_KEY,
+                                                  _high_gear_dist))
+            self.locationGroups.append(ozzieKey)
+        
+        if GF.ADD_RACELOG_SPOT in flags:
+            lab32Key = LocationGroup(
+                "RaceLog Chest", 1, _canAccessRaceLog
+            )
+            lab32Key.addLocation(BaselineLocation(TID.LAB_32_RACE_LOG,
+                                                  _high_gear_dist))
+            self.locationGroups.append(lab32Key)
+
+        if GF.SPLIT_ARRIS_DOME in flags:
+            future = self.getLocationGroup("FutureOpen")
+            future.removeLocationTIDs(TID.ARRIS_DOME_DOAN_KEY)
+            future.addLocation(BaselineLocation(TID.ARRIS_DOME_FOOD_LOCKER_KEY,
+                                                _high_gear_dist))
+
+            doanKey = LocationGroup("DoanSeed", 1, _canAccessDoanKeyVR)
+            doanKey.addLocation(BaselineLocation(TID.ARRIS_DOME_DOAN_KEY,
+                                                 _high_gear_dist))
+            self.locationGroups.append(doanKey)
+
+        if GF.VANILLA_DESERT in flags:
+            fiona_shrine = self.getLocationGroup('Fionashrine')
+            fiona_shrine.accessRule = _canAccessFionasShrineVR
+
+        if GF.ROCKSANITY in flags:
+            self.initLocationsRocksanity()
+
+    def initLocationsRocksanity(self):
+        denadoroRock = LocationGroup(
+            "Denadoro Rock", 1, lambda game: True
+        )
+        denadoroRock.addLocation(Location(TID.DENADORO_ROCK))
+
+        giantsClawRock = LocationGroup(
+            "Giantsclaw Rock", 1, lambda game: game.canAccessGiantsClaw()
+        )
+        giantsClawRock.addLocation(Location(TID.GIANTS_CLAW_ROCK))
+
+        # laruba
+        larubaRock = LocationGroup(
+            "Laruba Rock", 1, lambda game: game.canAccessPrehistory()
+        )
+        larubaRock.addLocation(Location(TID.LARUBA_ROCK))
+
+        # kajar
+        kajarRock = LocationGroup(
+            "Kajar Rock", 1, lambda game: game.canAccessMtWoe()
+        )
+        kajarRock.addLocation(Location(TID.KAJAR_ROCK))
+
+        self.locationGroups.extend([
+            denadoroRock, giantsClawRock, larubaRock, kajarRock
+        ])
+
+        if _couldAccessBlackOmen(self):
+            # black omen rock set up to prevent putting go-mode items there
+            blackOmenRock = LocationGroup(
+                    "Black Omen Rock", 1, lambda game: (
+                    game.canAccessBlackOmen() and
+                    game.canAccessMagusCastle() and
+                    game.canAccessTyranoLair()
+                )
+            )
+            blackOmenRock.addLocation(Location(TID.BLACK_OMEN_TERRA_ROCK))
+            self.locationGroups.append(blackOmenRock)
+
+
 # end NormalGameConfig class
+
+def _couldAccessBlackOmen(gc: GameConfig) -> bool:
+    flags = gc.settings.gameflags
+    GF = rset.GameFlags
+
+    # configurations which do not have access to Black Omen
+    omenless_cfgs: List[Type[GameConfig]] = [
+        ChronosanityIceAgeGameConfig,
+        ChronosanityLegacyOfCyrusGameConfig,
+        IceAgeGameConfig,
+        LegacyOfCyrusGameConfig,
+    ]
+    inaccessible = any(isinstance(gc, cfg) for cfg in omenless_cfgs)
+
+    return not inaccessible and GF.REMOVE_BLACK_OMEN_SPOT not in flags
 
 #
 # This class represents the game configuration for a
 # Lost Worlds game.
 #
-
-
 class LostWorldsGameConfig(GameConfig):
     def __init__(self, settings: rset.Settings, config: cfg.RandoConfig):
         self.charLocations = config.char_assign_dict
         GameConfig.__init__(self, settings, config)
+
+    def resolveExtraKeyItems(self):
+        pass
 
     def initGame(self):
         self.game = Game(self.settings, self.config)
@@ -1142,7 +1475,7 @@ class LostWorldsGameConfig(GameConfig):
         )
         (
             futureKeys
-            .addLocation(Location(TID.ARRIS_DOME_KEY))
+            .addLocation(Location(TID.ARRIS_DOME_DOAN_KEY))
             .addLocation(Location(TID.SUN_PALACE_KEY))
             .addLocation(Location(TID.GENO_DOME_KEY))
         )
@@ -1200,8 +1533,11 @@ class ChronosanityLegacyOfCyrusGameConfig(ChronosanityGameConfig):
         unavail_char = \
             self.config.char_assign_dict[RecruitID.PROTO_DOME].held_char
 
+        # TODO: Consider whether in Cronosanity we allow Prismshard with no
+        #       Marle so that the treasury is available.
         if unavail_char == Characters.MARLE:
             removed_names.append('GuardiaTreasury')
+            removed_names.append('KingsTrialKey')
         elif unavail_char == Characters.ROBO:
             removed_names.append('Fionashrine')
 
@@ -1246,7 +1582,8 @@ class LegacyOfCyrusGameConfig(NormalGameConfig):
             removed_items.append(ItemID.DREAMSTONE)
 
         for item in removed_items:
-            self.keyItemList.remove(item)
+            if item in self.keyItemList:  # In case something else removed RR
+                self.keyItemList.remove(item)
 
     def initLocations(self):
         # We actually need to mostly redo this whole thing to implement the
@@ -1336,6 +1673,9 @@ class LegacyOfCyrusGameConfig(NormalGameConfig):
             )
             self.locationGroups.append(fionaShrineLocations)
 
+        if rset.GameFlags.ROCKSANITY in self.settings.gameflags:
+            NormalGameConfig.initLocationsRocksanity(self)
+
 
 class IceAgeGameConfig(NormalGameConfig):
     def __init__(self, settings: rset.Settings, config: cfg.RandoConfig):
@@ -1368,7 +1708,7 @@ class IceAgeGameConfig(NormalGameConfig):
 
         def has_go_mode(game: Game):
             return (
-                game.canAccessDactylCharacter and
+                game.canAccessDactylCharacter() and
                 game.hasCharacter(Characters.AYLA) and
                 game.hasKeyItem(ItemID.DREAMSTONE)
             )
@@ -1416,14 +1756,27 @@ def _canAccessKingsTrialVR(game: Game):
 
 
 def _canAccessFionasShrineVR(game: Game):
-    return (
-        game.hasCharacter(Characters.ROBO) and
-        game.canAccessMtWoe()
-    )
+
+    flags = game.settings.gameflags
+    GF = rset.GameFlags
+
+    if not game.hasCharacter(Characters.ROBO):
+        return False
+
+    if GF.UNLOCKED_SKYGATES:
+        return game.canAccessMtWoe()
+    else:
+        return game.canAccessTyranoLair() or game.canAccessMagusCastle()
 
 
 def _canAccessNorthernRuinsVR(game: Game):
-    return game.hasKeyItem(ItemID.TOOLS)
+    restore_tools = rset.GameFlags.RESTORE_TOOLS in  game.settings.gameflags
+    if restore_tools:
+        fix_item = ItemID.TOOLS
+    else:
+        fix_item = ItemID.MASAMUNE_2
+
+    return game.hasKeyItem(fix_item)
 
 
 def _canAccessCyrusGraveVR(game: Game):
@@ -1433,9 +1786,26 @@ def _canAccessCyrusGraveVR(game: Game):
         game.canAccessMtWoe()
     )
 
+def _canAccessDoanKeyVR(game: Game):
+    return game.canAccessFuture() and game.hasKeyItem(ItemID.SEED)
+
+
+def _canAccessRaceLog(game: Game):
+    has_johnny = \
+        rset.GameFlags.RESTORE_JOHNNY_RACE in game.settings.gameflags
+    return (
+        game.hasKeyItem(ItemID.PENDANT) and
+        (
+            game.hasKeyItem(ItemID.BIKE_KEY) or not has_johnny
+        )
+    )
 
 _awesome_gear_dist = td.TreasureDist(
     (1, td.get_item_list(td.ItemTier.AWESOME_GEAR))
+)
+
+_high_gear_dist = td.TreasureDist(
+    (1, td.get_item_list(td.ItemTier.HIGH_GEAR))
 )
 
 
@@ -1443,9 +1813,6 @@ class VanillaRandoGameConfig(NormalGameConfig):
 
     def initKeyItems(self):
         NormalGameConfig.initKeyItems(self)
-
-        self.keyItemList.append(ItemID.TOOLS)
-        self.keyItemList.remove(ItemID.ROBORIBBON)
 
     def initLocations(self):
         NormalGameConfig.initLocations(self)
@@ -1460,61 +1827,34 @@ class VanillaRandoGameConfig(NormalGameConfig):
         fiona_shrine = self.getLocationGroup('Fionashrine')
         fiona_shrine.accessRule = _canAccessFionasShrineVR
 
-        bekklerKey = LocationGroup(
-            "BekklersLab", 1,
-            lambda game: game.hasKeyItem(ItemID.C_TRIGGER)
-        )
-        bekklerKey.addLocation(
-            BaselineLocation(TID.BEKKLER_KEY, _awesome_gear_dist)
-        )
-        self.locationGroups.append(bekklerKey)
-
-        cyrusKey = LocationGroup(
-            "HerosGrave", 1, _canAccessCyrusGraveVR
-        )
-        cyrusKey.addLocation(
-            BaselineLocation(TID.CYRUS_GRAVE_KEY, _awesome_gear_dist)
-        )
-        self.locationGroups.append(cyrusKey)
-
 
 class ChronosanityVanillaRandoGameConfig(ChronosanityGameConfig):
 
     def initKeyItems(self):
         ChronosanityGameConfig.initKeyItems(self)
 
-        for i in range(5):
-            self.keyItemList.append(ItemID.TOOLS)
+        # This is call done in ChronosanityGameConfig now.
+        # for i in range(5):
+        #     self.keyItemList.append(ItemID.TOOLS)
+        #     self.keyItemList.append(ItemID.SEED)
+        #     self.keyItemList.append(ItemID.BIKE_KEY)
+        #     self.keyItemList.append(ItemID.SUN_STONE)
 
-        while ItemID.ROBORIBBON in self.keyItemList:
-            self.keyItemList.remove(ItemID.ROBORIBBON)
+        # while ItemID.ROBORIBBON in self.keyItemList:
+        #     self.keyItemList.remove(ItemID.ROBORIBBON)
 
     def initLocations(self):
         ChronosanityGameConfig.initLocations(self)
 
+        # Gate Vanilla endgame dungeons behind Mt. Woe access
         giants_claw = self.getLocationGroup('Giantsclaw')
         giants_claw.accessRule = _canAccessGiantsClawVR
 
-        kings_trial = self.getLocationGroup('GuardiaTreasury')
+        kings_trial = self.getLocationGroup('KingsTrialKey')
         kings_trial.accessRule = _canAccessKingsTrialVR
 
         fiona_shrine = self.getLocationGroup('Fionashrine')
         fiona_shrine.accessRule = _canAccessFionasShrineVR
-
-        bekklerKey = LocationGroup(
-            "BekklersLab", 2,
-            lambda game: game.hasKeyItem(ItemID.C_TRIGGER)
-        )
-        bekklerKey.addLocation(Location(TID.BEKKLER_KEY))
-
-        self.locationGroups.append(bekklerKey)
-
-        northernRuinsLocations = self.getLocationGroup('NorthernRuins')
-        northernRuinsLocations.accessRule = _canAccessNorthernRuinsVR
-
-        northernRuinsFrog = self.getLocationGroup('NorthernRuinsFrogLocked')
-        northernRuinsFrog.addLocation(Location(TID.CYRUS_GRAVE_KEY))
-        northernRuinsFrog.accessRule = _canAccessCyrusGraveVR
 
 
 #
@@ -1537,6 +1877,8 @@ def getGameConfig(settings: rset.Settings, config: cfg.RandoConfig):
     iceAge = rset.GameMode.ICE_AGE == settings.game_mode
     legacyofcyrus = rset.GameMode.LEGACY_OF_CYRUS == settings.game_mode
     vanilla = rset.GameMode.VANILLA_RANDO == settings.game_mode
+
+    CfgType: typing.Type[GameConfig]
 
     if chronosanity:
         if lostWorlds:

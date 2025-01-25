@@ -1,35 +1,33 @@
 '''
 Module for hacks that just change looks/sounds without changing gameplay.
 '''
+from typing import Optional
 import ctenums
 
 from ctrom import CTRom
 # import randoconfig as cfg
 
-import byteops
 import ctevent
 import ctstrings
-import mapmangler
+from maps import locationtypes
 import randosettings as rset
 
 
 def set_pc_names(
         ct_rom: CTRom,
-        crono_name: str = None,
-        marle_name: str = None,
-        lucca_name: str = None,
-        robo_name: str = None,
-        frog_name: str = None,
-        ayla_name: str = None,
-        magus_name: str = None,
-        epoch_name: str = None
+        crono_name: Optional[str] = None,
+        marle_name: Optional[str] = None,
+        lucca_name: Optional[str] = None,
+        robo_name: Optional[str] = None,
+        frog_name: Optional[str] = None,
+        ayla_name: Optional[str] = None,
+        magus_name: Optional[str] = None,
+        epoch_name: Optional[str] = None
 ):
     '''
     Provide names to be used for characters and epoch.
     '''
-    default_names = (
-        'Crono', 'Marle', 'Lucca', 'Robo', 'Frog', 'Ayla', 'Magus', 'Epoch'
-    )
+    default_names = rset.CharNames.default()
 
     copy_str = bytearray()
 
@@ -90,9 +88,6 @@ def zenan_bridge_alt_battle_music(ctrom: CTRom, settings: rset.Settings):
     # There should only be one playsong command in that function
     pos, _ = script.find_command([0xEA], start, end)
 
-    if pos is None:
-        raise ValueError("Error finding Zenan Bridge battle song command")
-
     # Byte after the command id has the song id.
     script.data[pos+1] = 0x51
 
@@ -118,7 +113,7 @@ def death_peak_singing_mountain_music(ctrom: CTRom,
         LocID.DEATH_PEAK_UPPER_NORTH_FACE
     ]
 
-    LocData = mapmangler.LocationData
+    LocData = locationtypes.LocationData
     rom = ctrom.rom_data.getbuffer()
 
     for loc in death_peak_maps:
@@ -134,7 +129,29 @@ def death_peak_singing_mountain_music(ctrom: CTRom,
     end = script.get_function_end(0x08, 1)
     pos = script.find_exact_command(change_music, start, end)
 
-    if pos is None:
-        raise ValueError('Error finding play \'Silent light\' command')
-
     script.data[pos+1] = 0x52
+
+
+def set_auto_run(ct_rom: CTRom):
+    # Each direction (up, down, left, right, + 4 diags) has a block for
+    # setting run or not.  We follow an old Mauron post
+    # https://gamefaqs.gamespot.com/boards/563538-chrono-trigger/ \
+    #   75569957?page=5
+    # and reverse BEQs to BNEs.  Note that the post is missing the down/left
+    # jump location.
+    jump_command_addrs = [
+        0x00892A, 0x008949, 0x008968, 0x008987, 0x008A41,
+        0x008A0C, 0x0089A6, 0x0089D7
+    ]
+
+    jump_cmds = bytes.fromhex('ADF8008902F0')
+    rom = ct_rom.rom_data.getbuffer()
+
+    for addr in jump_command_addrs:
+        end = addr + 1
+        st = end - len(jump_cmds)
+
+        if bytes(rom[st:end]) != jump_cmds:
+            raise ValueError(f'Did not find a jump at {addr:06X}')
+
+        rom[addr] = 0xD0  # BNE instead of the 0xF0 BEQ

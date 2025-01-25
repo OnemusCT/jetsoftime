@@ -2,7 +2,7 @@ from __future__ import annotations
 import typing
 
 from ctenums import ItemID, CharID, RecruitID, TreasureID
-import treasuredata as td
+from treasures import treasuredata as td
 import randosettings as rset
 import randoconfig as cfg
 #
@@ -21,8 +21,8 @@ import randoconfig as cfg
 class Game:
     def __init__(self, settings: rset.Settings,
                  config: cfg.RandoConfig):
-        self.characters = set()
-        self.keyItems = set()
+        self.characters: typing.Set[CharID] = set()
+        self.keyItems: typing.Set[ItemID] = set()
         self.earlyPendant = rset.GameFlags.FAST_PENDANT in settings.gameflags
         self.lockedChars = rset.GameFlags.LOCKED_CHARS in settings.gameflags
         self.lostWorlds = rset.GameMode.LOST_WORLDS == settings.game_mode
@@ -30,8 +30,11 @@ class Game:
         self.legacyofcyrus = \
             rset.GameMode.LEGACY_OF_CYRUS == settings.game_mode
 
-        # In case we need to look something else up
+        self.epoch_fail = rset.GameFlags.EPOCH_FAIL in settings.gameflags
+
+    # In case we need to look something else up
         self.settings = settings
+
 
     #
     # Get the number of key items that have been acquired by the player.
@@ -117,6 +120,13 @@ class Game:
     def hasKeyItem(self, item):
         return item in self.keyItems
 
+
+    def hasKeyItems(self, *items: ItemID):
+        for item in items:
+            if not self.hasKeyItem(item):
+                return False
+        return True
+
     #
     # Add a key item to the set of key items acquired
     #
@@ -185,7 +195,7 @@ class Game:
         self.addCharacter(self.charLocations[RecruitID.CASTLE].held_char)
 
         # The remaining three characters are progression gated.
-        if self.canAccessFuture():
+        if self.canAccessProtoDome():
             self.addCharacter(
                 self.charLocations[RecruitID.PROTO_DOME].held_char
             )
@@ -215,6 +225,43 @@ class Game:
         return not self.legacyofcyrus and \
             (self.hasKeyItem(ItemID.PENDANT) or self.lostWorlds)
 
+    def canAccessEndOfTime(self):
+        return (
+            not self.lostWorlds and
+            (self.canAccessProtoDome() or self.canAccessPrehistory())
+        )
+
+    def canFly(self):
+        flags = self.settings.gameflags
+        GF = rset.GameFlags
+        if GF.EPOCH_FAIL in flags:
+            if not self.hasKeyItem(ItemID.JETSOFTIME):
+                return False
+            # Now assume the jets is obtained
+            if GF.UNLOCKED_SKYGATES in flags:
+                return self.canAccessEndOfTime()
+            else:
+                return True
+        return True
+
+    def canAccessProtoDome(self):
+        # This is the only place that self.epoch_fail is used because it's
+        # part of a character check.  For TID access rules, I rely on
+        # apply_epoch_fail to add flight requirements to Locations.
+
+        flags = self.settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.RESTORE_JOHNNY_RACE in flags and GF.EPOCH_FAIL in flags:
+            return (
+                self.canAccessFuture() and
+                (
+                    self.hasKeyItem(ItemID.BIKE_KEY) or
+                    self.hasKeyItem(ItemID.GATE_KEY)
+                )
+            )
+        return self.canAccessFuture()
+
     def canAccessPrehistory(self):
         return self.hasKeyItem(ItemID.GATE_KEY) or self.lostWorlds
 
@@ -231,9 +278,7 @@ class Game:
                 self.hasCharacter(CharID.FROG))
 
     def canAccessMtWoe(self):
-        return (self.lostWorlds or
-                self.canAccessPrehistory() or
-                self.canAccessFuture())
+        return (self.lostWorlds or self.canAccessEndOfTime())
 
     def canAccessOceanPalace(self):
         return (
@@ -245,9 +290,16 @@ class Game:
         )
 
     def canAccessBlackOmen(self):
-        return (self.canAccessFuture() and
-                self.hasKeyItem(ItemID.CLONE) and
-                self.hasKeyItem(ItemID.C_TRIGGER))
+        # TODO: There's an issue here with EF needing Jets to access.
+        #       It's not game-breaking because seeds are 100%able, but spheres
+        #       will be wrong.
+
+        return(
+            self.canAccessFuture() and
+            self.hasKeyItem(ItemID.CLONE) and
+            self.hasKeyItem(ItemID.C_TRIGGER) and
+            self.canFly()
+        )
 
     def canGetSunstone(self):
         return (self.canAccessFuture() and
@@ -259,8 +311,15 @@ class Game:
                 self.hasKeyItem(ItemID.PRISMSHARD))
 
     def canAccessMelchiorsRefinements(self):
-        return (self.canAccessKingsTrial() and
-                self.canGetSunstone())
+        flags = self.settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.ADD_SUNKEEP_SPOT in flags:
+            return (self.canAccessKingsTrial() and
+                    self.hasKeyItem(ItemID.SUN_STONE))
+        else:
+            return (self.canAccessKingsTrial() and
+                    self.canGetSunstone())
 
     def canAccessGiantsClaw(self):
         return self.hasKeyItem(ItemID.TOMAS_POP)
@@ -271,18 +330,30 @@ class Game:
     def canAccessSealedChests(self):
         # With 3.1.1. logic change, canAccessDarkAges isn't correct for
         # checking sealed chest access.  Instead check for actual go modes.
+
+        unlocked_skygates = rset.GameFlags.UNLOCKED_SKYGATES in \
+            self.settings.gameflags
+
         return (
-            self.hasKeyItem(ItemID.PENDANT) and
-             (self.earlyPendant or
-              self.canAccessTyranoLair() or
-              self.canAccessMagusCastle())
+            self.hasKeyItem(ItemID.PENDANT) and (
+                (unlocked_skygates and self.canAccessEndOfTime()) or
+                self.earlyPendant or
+                self.canAccessTyranoLair() or
+                self.canAccessMagusCastle()
+            )
         )
 
     def canAccessBurrowItem(self):
         return self.hasKeyItem(ItemID.HERO_MEDAL)
 
     def canAccessFionasShrine(self):
-        return self.hasCharacter(CharID.ROBO)
+        vanilla_desert = \
+            rset.GameFlags.VANILLA_DESERT in self.settings.gameflags
+        if vanilla_desert:
+            return (self.hasCharacter(CharID.ROBO) and
+                    self.canAccessEndOfTime())
+        else:
+            return self.hasCharacter(CharID.ROBO)
     # End Game class
 
 #
@@ -294,9 +365,12 @@ class Game:
 class Location:
     def __init__(self, treasure_id: TreasureID):
         self.treasure_id = treasure_id
-        self.keyItem = None
+        self.keyItem: ItemID = ItemID.NONE
 
-    def _jot_json(self):
+    def __repr__(self):
+        return f'<Location.{self.getName()}>'
+
+    def to_jot_json(self):
         return {self.getName(): str(self.getKeyItem())}
 
     #
@@ -342,7 +416,7 @@ class Location:
     #                 treasure assignment dictionary
     #
     def writeKeyItem(self, config: cfg.RandoConfig):
-        config.treasure_assign_dict[self.treasure_id].held_item = self.keyItem
+        config.treasure_assign_dict[self.treasure_id].reward = self.keyItem
 
     #
     # Use the given config to see what is currently assigned to this location.
@@ -351,7 +425,12 @@ class Location:
     #                 treasure assignment dictionary
     #
     def lookupKeyItem(self, config: cfg.RandoConfig) -> ItemID:
-        return config.treasure_assign_dict[self.treasure_id].held_item
+        reward = config.treasure_assign_dict[self.treasure_id].reward
+
+        if not isinstance(reward, ItemID):
+            raise ValueError
+
+        return reward
 
 # End Location class
 
@@ -404,7 +483,7 @@ class BaselineLocation(Location):
     # param: config - The cfg.RandoConfig to write the ItemID to
     #
     def writeTreasure(self, treasure: ItemID, config: cfg.RandoConfig):
-        config.treasure_assign_dict[self.treasure_id].held_item = treasure
+        config.treasure_assign_dict[self.treasure_id].reward = treasure
         self.setKeyItem(treasure)
 # End BaselineLocation class
 
@@ -425,7 +504,7 @@ class LinkedLocation():
         self.location1 = location1
         self.location2 = location2
 
-    def _jot_json(self):
+    def to_jot_json(self):
         return {self.getName(): str(self.getKeyItem())}
 
     def getName(self):
@@ -516,6 +595,9 @@ class LocationGroup:
         self.accessRule = accessRule
         self.weightDecay = weightDecay
         self.weightStack = []
+
+    def __repr__(self):
+        return f'<LocationGroup.{self.name}>'
 
     #
     # Return whether or not this location group is accessible.

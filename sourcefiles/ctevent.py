@@ -1,4 +1,7 @@
 from __future__ import annotations
+import enum
+from pathlib import Path
+from typing import ByteString, Optional, Union, Tuple
 
 from ctdecompress import compress, decompress, get_compressed_length, \
     get_compressed_packet
@@ -8,10 +11,39 @@ from byteops import get_value_from_bytes, to_little_endian, to_file_ptr, \
 import ctstrings
 from eventcommand import EventCommand as EC, get_command
 from eventfunction import EventFunction as EF
-from freespace import FreeSpace as FS, FSRom, FSWriteType
+from freespace import FSRom, FSWriteType
 
 
-def get_compressed_script(rom, event_id):
+class FunctionID(enum.IntEnum):
+    '''Convenience enum for TF-style object function naming.'''
+    STARTUP = 0
+    ACTIVATE = 1
+    TOUCH = 2
+    ARBITRARY_0 = 3
+    ARBITRARY_1 = 4
+    ARBITRARY_2 = 5
+    ARBITRARY_3 = 6
+    ARBITRARY_4 = 7
+    ARBITRARY_5 = 8
+    ARBITRARY_6 = 9
+    ARBITRARY_7 = 0xA
+    ARBITRARY_8 = 0xB
+    ARBITRARY_9 = 0xC
+    ARBITRARY_A = 0xD
+    ARBITRARY_B = 0xE
+    ARBITRARY_C = 0xF
+
+
+class CommandNotFoundException(Exception):
+    '''Raise when a find_command call fails.'''
+
+
+def get_compressed_script(rom: ByteString, event_id: int):
+    '''
+    Gets the compressed event packet for the given event_id.
+
+    Note: event_id is not the same as location id.
+    '''
     # Location events pointers are located on the rom starting at 0x3CF9F0
     # Each location has (I think) an index into this list of pointers.  The
     # pointers definitely do not occur in the same order as the locations.
@@ -25,20 +57,20 @@ def get_compressed_script(rom, event_id):
         get_value_from_bytes(rom[start:start+3])
     event_ptr = to_file_ptr(event_ptr)
 
-    # print(f"ptr: {event_ptr:06X}")
-
     return get_compressed_packet(rom, event_ptr)
 
 
-def get_loc_event_ptr(rom, loc_id):
+def get_loc_event_ptr(rom: ByteString, loc_id: int) -> int:
+    '''Get a the address of a location's event packet.'''
     # Location data begins at 0x360000.
     # Each record is 14 bytes.  Bytes 8 and 9 (0-indexed) hold an index into
     # the pointer table for event scripts.
 
     loc_data_st = 0x360000
     event_ind_st = loc_data_st + 14*loc_id + 8
-
+    print(hex(event_ind_st))
     loc_script_ind = get_value_from_bytes(rom[event_ind_st:event_ind_st+2])
+    print(hex(loc_script_ind))
 
     event_ptr_st = 0x3CF9F0
 
@@ -67,62 +99,12 @@ def get_location_script(rom, loc_id):
     return get_compressed_script(rom, loc_script_ind)
 
 
-def free_event(fsrom: FS, loc_id: int):
-    ''' Mark a location's script and (if possible) strings as free space. '''
-
-    rom = fsrom.getbuffer()
-    event_ptr = get_loc_event_ptr(rom, loc_id)
-    event_len = get_compressed_length(rom, event_ptr)
-
-    fsrom.mark_block((event_ptr, event_ptr+event_len), FSWriteType.MARK_FREE)
-
-    event = Event.from_rom(rom, event_ptr)
-    string_index = event.get_string_index()
-
-    # It is possible for there to not be any strings in an event and hence
-    # no string index.
-    if string_index is not None:
-        # Here we're going to try to detect whether the strings are all
-        # particular to the event we're reading.  If so we'll mark them as free
-
-        str_bank = string_index % 0x10000
-        first_str_addr = \
-            get_value_from_bytes(rom[string_index:string_index+2]) + str_bank
-
-        # Assume that everything from the string index to the first string is
-        # two byte pointers to the strings.
-
-        # This will not always be true...strings are going to take more care
-        # to free correctly.  For now let's live with some string duplication.
-        num_strings = (first_str_addr - string_index) / 2
-
-        str_total_len = sum(len(x) for x in event.strings)
-
-        if num_strings == len(event.strings):
-            fsrom.mark_block((string_index,
-                              string_index + 2*num_strings + str_total_len),
-                             True)
-
-            # Some diagnostic stuff
-            # print(f"Num strings at index: {num_strings}")
-            # print(f"Num strings used: {len(event.strings)}")
-        else:
-            # We can maybe still do something if the strings are shared
-            # between multiple scripts.
-
-            # Some duplicate strings will be left behind, but I don't see how
-            # to fix it without reading ALL of the scripts and tracking where
-            # the strings are.
-
-            # Maybe do this once, pickle the result?  You'll have to update
-            # the initial db whenever there's a script change in patch.ips.
-            pass
-
-
 # The strategy is to handle the event very similarly to how the game does.
 # The event is just one big list of commands with pointers giving the starts
 # of relevant entities (objects, functions).
 class Event:
+
+    _flux_path: Path = Path(__file__).parent / 'flux'
 
     def __init__(self):
         self.num_objects = 0
@@ -132,104 +114,24 @@ class Event:
 
         self.data = bytearray()
 
+        self.modified_strings = False
         self.strings = []
 
     def get_bytearray(self) -> bytearray:
         return bytearray([self.num_objects]) + self.data
 
-    # Put the given event back into the rom attached to a specific location.
-    # Returns the start address of where the data is written
-    def write_to_rom_fs(fsrom: FS, loc_id: int,
-                        script: Event) -> int:
-        # We're going to write the strings immediately before the event data.
-        # The event needs to have its stringindex updated after the strings
-        # have been written, and only then can the script be compressed and
-        # written out.
-
-        strings_len = sum(len(x) for x in script.strings)
-        ptrs_len = 2*len(script.strings)
-        total_len = strings_len + ptrs_len
-
-        string_index = fsrom.get_free_addr(total_len)
-
-        str_pos = string_index % 0x10000 + ptrs_len
-        fsrom.seek(string_index)
-
-        # Write the pointers
-        for i in range(len(script.strings)):
-            fsrom.write(to_little_endian(str_pos, 2), FSWriteType.MARK_USED)
-            str_pos += len(script.strings[i])
-
-        # Write the strings immediately afterwards
-        for x in script.strings:
-            fsrom.write(x, FSWriteType.MARK_USED)
-
-        # Now we need to go into the script and update the string index
-        string_index_b = to_little_endian(to_rom_ptr(string_index), 3)
-
-        fn_start = script.get_function_start(0, 0)
-        fn_end = script.get_object_end(0)  # TODO: write a get_function_end
-
-        pos = fn_start
-        while pos < fn_end:
-            cmd = get_command(script.data, pos)
-            if cmd.command == 0xB8:
-                script.data[pos+1:pos+4] = string_index_b[:]
-
-            pos += len(cmd)
-
-        compr_event = compress(script.get_bytearray())
-
-        # debug stuff
-        '''
-        decompr_event = decompress(compr_event, 0)
-
-        if len(script.get_bytearray()) != len(decompr_event):
-            print("len mismatch")
-            print(len(script.data))
-            print(len(decompr_event))
-        else:
-            diff = [i for i in range(len(script.get_bytearray()))
-                    if script.get_bytearray()[i] != decompr_event[i]]
-            if diff:
-                print('Diff:', diff)
-        '''
-        # end debug stuff
-
-        script_ptr = fsrom.get_free_addr(len(compr_event))
-
-        fsrom.seek(script_ptr)
-        fsrom.write(compr_event, FSWriteType.MARK_USED)
-
-        # Now write the location's pointer
-        # Location data begins at 0x360000.
-        loc_data_st = 0x360000
-        event_ind_st = loc_data_st + 14*loc_id + 8
-
-        loc_script_ind = \
-            get_value_from_bytes(fsrom.getbuffer()[event_ind_st:
-                                                   event_ind_st+2])
-
-        event_ptr_st = 0x3CF9F0
-
-        # Each event pointer is an absolute, 3 byte pointer
-        loc_ptr = event_ptr_st + 3*loc_script_ind
-
-        fsrom.seek(loc_ptr)
-        fsrom.write(to_little_endian(to_rom_ptr(script_ptr), 3))
-
-    # End write_to_rom_fs
-
-    def from_rom_location(rom: bytearray, loc_id: int) -> Event:
+    @staticmethod
+    def from_rom_location(rom: ByteString, loc_id: int) -> Event:
         ''' Read an event from the specified game location. '''
 
         ptr = get_loc_event_ptr(rom, loc_id)
+        print(hex(ptr))
         return Event.from_rom(rom, ptr)
 
+    @staticmethod
     def from_flux(filename: str):
         '''Reads a .flux file and loads it into an Event'''
-
-        with open(filename, 'rb') as infile:
+        with Event._get_flux_path(filename).open('rb') as infile:
             flux = bytearray(infile.read())
 
         # These first bytes are used internally by TF, but they don't seem
@@ -284,7 +186,7 @@ class Event:
             # only clear out the 0s and handle the rest in ctstrings.
 
             cur_string = \
-                bytes([x for x in cur_string if x != 0])
+                bytearray([x for x in cur_string if x != 0])
 
             # alias to save keystrokes
             CTString = ctstrings.CTString
@@ -299,15 +201,15 @@ class Event:
         # end while pos < len(flux)
 
         if num_strings != len(ret_script.strings):
-            print(f"Expected {num_strings} strings.  "
-                  f"Found {len(ret_script.strings)}")
-            exit()
+            raise ValueError(f"Expected {num_strings} strings.  "
+                             f"Found {len(ret_script.strings)}")
 
         ret_script.modified_strings = True
 
         return ret_script
 
-    def from_rom(rom: bytearray, ptr: int) -> Event:
+    @classmethod
+    def from_rom(cls, rom: ByteString, ptr: int) -> Event:
         ret_event = Event()
 
         event = decompress(rom, ptr)
@@ -334,21 +236,74 @@ class Event:
         for i in range(self.num_objects):
             print(f"Object {i:02X}")
             print(' '.join(f"{self.get_function_start(i,j):04X}"
-                           for j in range(8)))
-            print(' '.join(f"{self.get_function_start(i,j):04X}"
-                           for j in range(8, 16)))
+                           for j in range(16)))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(8, 16)))
+    
+    def get_commands_for_object(self, i):
+        pos = self.get_object_start(i)
+        end = self.get_object_end(i)
+        commands = []
+        while pos < end:
+            cmd = get_command(self.data, pos)
+            commands.append(cmd)
+            pos += len(cmd)
+        return commands
+    
+    def get_all_commands(self):
+        command_map = {}
+        for i in range(self.num_objects):
+            command_map[i] = self.get_commands_for_object(i)
+        return command_map
+    
+    def get_all_fuctions(self, object: int):
+        functions = []
+        for i in range(16):
+            functions.append(self.get_function(object, i))
+        return functions
+        
+        
+
+    def print_human_readable_fn(self):
+        for i in range(self.num_objects):
+            print(f"Object {i:02X}")
+            pos = self.get_object_start(i)
+            end = self.get_object_end(i)
+            indent = "\t"
+            indent_end = 0
+            while pos < end:
+                cmd = get_command(self.data, pos)
+                if pos > indent_end:
+                    indent = "\t" 
+                    indent_end = 0
+                print(indent + str(pos) + " " + str(cmd))
+                if cmd.command == 0x18:
+                    indent = "\t\t"      
+                    indent_end = pos + cmd.args[1]
+                pos += len(cmd)
+            
+            #print(self.get_raw_function(i,0))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(16)))
+            # print(' '.join(f"{self.get_function_start(i,j):04X}"
+            #                for j in range(8, 16)))
+
+    def add_py_string(self, new_string: str) -> int:
+        ct_str = ctstrings.CTString.from_str(new_string)
+        ct_str.compress()
+
+        return self.add_string(ct_str)
 
     def add_string(self, new_string: bytearray) -> int:
         self.strings.append(new_string)
         self.modified_strings = True
         return len(self.strings) - 1
 
-    def get_obj_strings(self, obj_id: int) -> list[bytearray]:
+    def get_obj_strings(self, obj_id: int) -> dict[int, bytearray]:
 
         if obj_id >= self.num_objects:
-            print(f"Error: requested object {obj_id:02X} " +
-                  f"(max {self.num_objects-1:02X}")
-            exit()
+            raise ValueError(f"Error: requested object {obj_id:02X} " +
+                             f"(max {self.num_objects-1:02X}")
 
         pos = self.get_object_start(obj_id)
         end = self.get_object_end(obj_id)
@@ -358,15 +313,17 @@ class Event:
         while pos < end:
             cmd = get_command(self.data, pos)
 
-            if cmd in EC.str_commands:
+            if cmd.command in EC.str_commands:
                 string_indices.add(cmd.args[0])
 
             pos += len(cmd)
 
-        string_indices = sorted(list(string_indices))
-        strings = [self.strings[i][:] for i in string_indices]
+        ret_dict = {
+            index: bytearray(self.strings[index])
+            for index in string_indices
+        }
 
-        return strings, string_indices
+        return ret_dict
 
     # Find the string index of an event
     def get_string_index(self):
@@ -395,22 +352,21 @@ class Event:
     # Using the FS object's getbuffer() gives a memoryview which doesn't
     # support bytearray's .index method.  This is a stupid short method to
     # extract a string starting at a given address.
-    def __get_ct_string(rom: bytearray, start_ptr: int) -> bytearray:
+    @classmethod
+    def __get_ct_string(cls, rom: ByteString, start_ptr: int) -> bytearray:
         end_ptr = start_ptr
 
-        while(rom[end_ptr] != 0 and end_ptr < len(rom)):
+        while rom[end_ptr] != 0 and end_ptr < len(rom):
             end_ptr += 1
 
         if end_ptr == len(rom):
-            print('Error, failed to find string end.')
-            exit()
-        else:
-            # Include the terminator in the string.
-            return bytearray(rom[start_ptr:end_ptr+1])
+            raise ValueError('Error, failed to find string end.')
+
+        return bytearray(rom[start_ptr:end_ptr+1])
 
     # This is only called during initialization of a script
     # We need access to the whole rom to look up the strings used by the script
-    def __init_strings(self, rom: bytearray):
+    def __init_strings(self, rom: ByteString):
 
         # First find the location where string pointers are stored by finding
         # the "string index" command in the script.
@@ -428,11 +384,6 @@ class Event:
                 # break
 
             pos += len(cmd)
-
-        if str_pos is None:
-            self.orig_str_index = None
-        else:
-            self.orig_str_index = str_pos
 
         self.modified_strings = False
         # indices that are used
@@ -454,27 +405,20 @@ class Event:
             pos += len(cmd)
 
         # turn str_indices into a sorted list
-        str_indices = sorted(list(str_indices))
-
-        self.orig_str_indices = str_indices
+        str_indices_list = sorted(list(str_indices))
         self.strings = []
 
         if str_indices:
+            if str_pos is None:
+                raise ValueError('Strings present but no string index set.')
+
             bank = (str_pos >> 16) << 16
             bank = to_file_ptr(bank)
 
-            for x in str_indices:
+            for index in str_indices_list:
                 # string ptrs are 2 byte ptrs local to the string_pos bank
-                ptr_st = to_file_ptr(str_pos+2*x)
+                ptr_st = to_file_ptr(str_pos+2*index)
                 str_st = get_value_from_bytes(rom[ptr_st:ptr_st+2])+bank
-
-                # find the null terminator.
-                # The cast to bytes is ugly because getbuffer()'s return
-                # type is MemoryView which does not have an index method.
-                # str_end = bytes(rom[str_st:]).index(0)+str_st+1
-
-                # print(str_st, str_end)
-                # self.strings.append(bytearray(rom[str_st:str_end]))
 
                 self.strings.append(Event.__get_ct_string(rom, str_st))
 
@@ -484,55 +428,13 @@ class Event:
             # Go back to the script and update the indices if any changed
 
             for addr in str_addrs:
-                new_ind = str_indices.index(self.data[addr])
+                new_ind = str_indices_list.index(self.data[addr])
 
                 if new_ind != self.data[addr]:
                     self.modified_strings = True
                     self.data[addr] = new_ind
 
         # end if there are any strings
-        '''
-        # Test to see if the indices were updated correctly
-        pos = 0
-        while pos < len(self.data):
-            cmd = get_command(self.data, pos)
-
-            if cmd.command in [0xBB, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4]:
-                print(cmd)
-
-            pos += len(cmd)
-
-        print("Done with strings.")
-        '''
-
-    # This should only be called once for a script when the original indices
-    # need to be updated.  The original indices can be sparse but once we
-    # reindex, they'll stay sequential.
-    def __reindex_strings(self):
-        if self.modified_strings:
-            return
-
-        # During __init_strings we should have found the string indices and
-        # put them (sorted) in self.orig_str_indices.  Now we'll reindex to
-        # 0, 1, ..., n-1
-
-        # The change is i --> index of i in self.orig_str_indices
-
-        self.modified_strings = True
-
-        # addresses in the script data where an index is located
-        # store these to go back and update the indices if we have to
-        pos = self.get_object_start(0)
-        while pos < len(self.data):
-            cmd = get_command(self.data, pos)
-
-            if cmd.command in EC.str_commands:
-                # string index argument is 0th arg.  In other words
-                # index is in self.data[pos+1]
-                self.data[pos+1] = \
-                    self.orig_str_indices.index(self.data[pos+1])
-
-            pos += len(cmd)
 
     def get_object_start(self, obj_id: int) -> int:
         return get_value_from_bytes(self.data[32*obj_id: 32*obj_id+2])
@@ -540,8 +442,8 @@ class Event:
     def get_object_end(self, obj_id: int) -> int:
         if obj_id == self.num_objects - 1:
             return len(self.data)
-        else:
-            return self.get_object_start(obj_id+1)
+
+        return self.get_object_start(obj_id+1)
 
     # Normal warning to make sure the function is nonempty before using
     # this value.
@@ -565,6 +467,11 @@ class Event:
         # If we get here, we didn't find a nonempty function after the given
         # function.  So our function goes to the end of the data.
         return len(self.data)
+    
+    def get_raw_function(self, obj_id: int, func_id: int) -> bytearray:
+        start = self.get_function_start(obj_id, func_id)
+        end = self.get_function_end(obj_id, func_id)
+        return self.data[start:end]
 
     def get_function(self, obj_id: int, func_id: int) -> EF:
         start = self.get_function_start(obj_id, func_id)
@@ -602,10 +509,44 @@ class Event:
         self.__shift_starts(obj_st, -obj_len)
         self.__shift_starts(-1, -32)
 
-        del(self.data[obj_st:obj_end])
-        del(self.data[32*obj_id:32*(obj_id+1)])
+        del self.data[obj_st:obj_end]
+        del self.data[32*obj_id:32*(obj_id+1)]
 
         self.num_objects -= 1
+
+    def __shift_object_calls(self, obj_id: int, is_deletion: bool):
+        # Remove all calls to object 0xC's functions
+        calls = [2, 3, 4]
+        draw_status = [0x7C, 0x7D]
+        processing = [0x0A, 0x0B, 0x0C]
+
+        obj_cmds = calls + draw_status + processing
+
+        pos: Optional[int] = self.get_function_start(0, 0)
+        end = len(self.data)
+        while True:
+            (pos, cmd) = self.find_command_opt(obj_cmds,
+                                               pos, end)
+            if pos is None:
+                break
+            # It just so happens that the draw status commands and the object
+            # call commands use 2*obj_id and have the object in arg0
+            if cmd.command in obj_cmds:
+                if cmd.args[0] == 2*obj_id and is_deletion:
+                    # print(f"deleted [{pos:04X}] " + str(cmd))
+                    # input()
+                    self.delete_commands(pos, 1)
+                    end = len(self.data)
+                else:
+                    if cmd.args[0] >= 2*obj_id:
+                        # print('shifting')
+                        # print(f"[{pos:04X}] " + str(cmd))
+                        # input()
+                        if is_deletion:
+                            self.data[pos+1] -= 2
+                        else:
+                            self.data[pos+1] += 2
+                    pos += len(cmd)
 
     def __remove_shift_object_calls(self, obj_id):
         # Remove all calls to object 0xC's functions
@@ -618,13 +559,13 @@ class Event:
         pos = self.get_function_start(0, 0)
         end = len(self.data)
         while True:
-            (pos, cmd) = self.find_command(obj_cmds,
-                                           pos, end)
+            (pos, cmd) = self.find_command_opt(obj_cmds,
+                                               pos, end)
             if pos is None:
                 break
             # It just so happens that the draw status commands and the object
             # call commands use 2*obj_id and have the object in arg0
-            elif cmd.command in obj_cmds:
+            if cmd.command in obj_cmds:
                 if cmd.args[0] == 2*obj_id:
                     # print(f"deleted [{pos:04X}] " + str(cmd))
                     # input()
@@ -643,70 +584,17 @@ class Event:
         pos = self.get_function_start(0, 0)
         end = len(self.data)
         while True:
-            (pos, cmd) = self.find_command([2, 3, 4],
-                                           pos, end)
+            (pos, cmd) = self.find_command_opt([2, 3, 4],
+                                               pos, end)
             if pos is None:
                 break
-            elif cmd.args[0] == 2*obj_id:
+            if cmd.args[0] == 2*obj_id:
                 # print(f"deleted [{pos:04X}] " + str(cmd))
                 # input()
                 self.delete_commands(pos, 1)
                 end = len(self.data)
             else:
                 pos += len(cmd)
-
-    # The objects in the given script will be inserted into this script
-    # at index ind.  The extra pointers of the argument will be thrown away.
-    # Really, this will only add small helper objects to scripts.
-    # For now, assume that there are no jumps that jump over the inserted
-    # area.
-
-    # Not recommending using this for now.
-    def insert_script(self, script: Event, ind: int):
-
-        # We're going to incorporate the strings before inserting the data.
-        num_strs = len(self.strings)
-
-        # new strings get indices num_strs, num_strs+1, ...
-        # if we were clever we'd check for strings we already have
-        self.strings.extend(script.strings)
-
-        pos = 0
-        while pos < len(script.data):
-            cmd = get_command(script.data, pos)
-            if cmd.command in EC.str_commands:
-                # add num_strs to get new data
-                # pos+1 is the location of the string index argument for all
-                # string commands
-                script.data[pos+1] += num_strs
-
-            pos += len(cmd)
-
-        # Now insert the data and update pointers
-        num_ins_obj = script.num_objects
-        ins_ptrs = script.data[1:1+32*num_ins_obj]
-
-        # TODO: rewrite with new __shift methods
-
-        # Figure out the new data's new start.  Shift the start pointers.
-        ins_data_start = self.get_object_start(ind)
-
-        for i in range(len(ins_ptrs)):
-            ins_ptrs[i] += ins_data_start
-
-        # Insert the pointers into the right place
-        self.data[1+32*ind:1+32*ind] = ins_ptrs[:]
-
-        # Increment the number of objects
-        self.num_objects += 1
-
-        # Shift all of the remaining pointers based on the new script length
-        ins_data_length = len(script) - (1+32*script.num_objects)
-
-        # Note we incremented self.num_objects above, so this is correctly
-        # going to the end of the pointer block
-        for i in range(1+32*ind, 1+32*(self.num_objects)):
-            self.data[i] += ins_data_length
 
     def print_func_starts(self, obj_id: int):
 
@@ -716,6 +604,9 @@ class Event:
 
     # This will break if the object has references to other objects' fns
     def append_copy_object(self, obj_id: int):
+
+        if self.num_objects == 0x40:
+            raise IndexError("No room for additional objects.")
 
         obj_start = self.get_object_start(obj_id)
         obj_end = self.get_function_end(obj_id, 0xF)
@@ -742,6 +633,9 @@ class Event:
     def append_empty_object(self) -> int:
         '''Makes space for new object.  Returns new object id.'''
 
+        if self.num_objects == 0x40:
+            raise IndexError("No room for additional objects.")
+
         # Account for the 32 bytes of pointers we're about to add here
         end_b = to_little_endian(len(self.data)+32, 2)
 
@@ -759,10 +653,191 @@ class Event:
 
         return self.num_objects-1
 
+    def insert_copy_object(self, copy_id: int, ins_id: int):
+        '''
+        Insert a copy of object copy_id into spot ins_id.
+        Will break if the object calls other object functions.
+        '''
+
+        orig_obj_st = self.get_function_start(copy_id, 0)
+        orig_obj_ptrs = [
+            int.from_bytes(self.data[32*copy_id+2*ind: 32*copy_id+2*ind+2],
+                           'little') - orig_obj_st
+            for ind in range(0x10)
+        ]
+
+        if copy_id == self.num_objects - 1:
+            orig_obj_end = len(self.data)
+        else:
+            orig_obj_end = self.get_function_start(copy_id+1, 0)
+
+        object_data = self.data[orig_obj_st: orig_obj_end]
+
+        insert_pos = self.get_function_start(ins_id, 0)
+        ins_obj_ptrs = [ptr+insert_pos for ptr in orig_obj_ptrs]
+        ins_obj_ptrs_b = b''.join(
+            int.to_bytes(ptr, 2, 'little')
+            for ptr in ins_obj_ptrs
+        )
+
+        # Shift jumps for insertion of new pointers and data.
+        self.__shift_jumps(insert_pos, insert_pos, len(object_data))
+        self.__shift_jumps(0, 0, 32)
+
+        self.__shift_starts(insert_pos-1, len(object_data))
+        self.__shift_object_calls(ins_id, is_deletion=False)
+
+        self.data[insert_pos:insert_pos] = object_data
+        self.data[32*ins_id:32*ins_id] = ins_obj_ptrs_b
+        self.num_objects += 1
+        self.__shift_starts(-1, 32)
+
+    def _function_is_linked(self, obj_id, func_id) -> bool:
+        '''
+        Determine whether a function links to another object's function.
+        '''
+        this_obj_st = self.get_object_start(obj_id)
+        if obj_id == self.num_objects - 1:
+            next_obj_st = len(self.data)
+        else:
+            next_obj_st = self.get_object_start(obj_id+1)
+
+        this_fn_st = self.get_function_start(obj_id, func_id)
+        return not (this_obj_st <= this_fn_st < next_obj_st)
+
+    def _function_is_empty(self, obj_id, func_id) -> bool:
+        '''
+        Determine whether a function is empty (links to previous function)
+        '''
+
+        if func_id == 0:
+            return False
+
+        given_start = self.get_function_start(obj_id, func_id)
+        for ind in range(func_id - 1, -1, -1):
+            prev_start = self.get_function_start(obj_id, ind)
+            if prev_start == given_start:
+                return True
+
+        return False
+
+    def _function_is_real(self, obj_id, func_id) -> bool:
+        return not (self._function_is_empty(obj_id, func_id) or
+                    self._function_is_linked(obj_id, func_id))
+
+    def _get_next_true_start(self, obj_id: int, func_id: int) -> int:
+        '''
+        Find the start of the next real function (non-empty, non-linked)
+        '''
+        # print(f'Finding true start after {obj_id:2X}, {func_id:02X}')
+        true_end = None
+
+        for ind in range(func_id+1, 0x10):
+            if self._function_is_real(obj_id, ind):
+                true_end = self.get_function_start(obj_id, ind)
+                break
+
+        if true_end is None:
+            if obj_id == self.num_objects - 1:
+                true_end = len(self.data)
+            else:
+                true_end = self.get_object_start(obj_id+1)
+
+        return true_end
+
+    def _set_function_start(self, obj_id, func_id, new_start):
+        ptr_st = obj_id*32 + func_id*2
+        self.data[ptr_st:ptr_st+2] = int.to_bytes(new_start, 2, 'little')
+
     def set_function(self, obj_id: int, func_id: int,
                      ev_func: EF):
+        self.set_function_new(obj_id, func_id, ev_func)
+
+    def set_function_new(self, obj_id: int, func_id: int,
+                         ev_func: EF):
+        '''
+        Version of set_function that tries to handle linked functions.
+        '''
+
+        # for i in range(0x10):
+        #     is_linked = self._function_is_linked(obj_id, i)
+        #     is_empty = self._function_is_empty(obj_id, i)
+        #     start = self.get_function_start(obj_id, i)
+
+        #     print(f'Function {i:02X}: {start+1:04X}, empty={is_empty}, '
+        #           f'linked={is_linked}')
+
+        # Find the first real function before this one.
+        # The true start is the end (next true start) from that point.
+        true_start = None
+        for ind in range(func_id-1, -1, -1):
+            if self._function_is_real(obj_id, ind):
+                true_start = self._get_next_true_start(obj_id, ind)
+                break
+
+        if true_start is None:
+            true_start = self.get_object_start(obj_id)
+
+        if true_start is None:
+            raise ValueError('Unable to find real function')
+
+        true_end = self._get_next_true_start(obj_id, func_id)
+
+        if len(ev_func) == 0:
+            # This is annoying because we're making a function empty
+            # TODO: check on this case
+            pass
+
+        # self.insert_commands(ev_func.get_bytearray(), true_start)
+        # self.delete_commands_range(true_start+len(ev_func),
+        #                            true_end+len(ev_func))
+        # print(ev_func, len(ev_func))
+
+        shift = len(ev_func) - (true_end-true_start)
+
+        empty_end = 0x10
+        for ind in range(func_id+1, 0x10):
+            if self._function_is_real(obj_id, ind):
+                empty_end = ind
+                break
+
+        # Set the empty functions immediately following the changed function
+        for ind in range(func_id+1, empty_end):
+            if self._function_is_empty(obj_id, ind) and \
+               not self._function_is_linked(obj_id, ind):
+                self._set_function_start(obj_id, ind, true_start)
+
+        for ind in range(empty_end, 0x10):
+            start = self.get_function_start(obj_id, ind)
+            if start >= true_start:
+                self._set_function_start(obj_id, ind,
+                                         start+shift)
+
+        self._set_function_start(obj_id, func_id, true_start)
+        for obj_ind in range(self.num_objects):
+            if obj_ind == obj_id:
+                continue
+
+            for func_ind in range(0x10):
+                func_st = self.get_function_start(obj_ind, func_ind)
+                if func_st >= true_start:
+                    self._set_function_start(obj_ind, func_ind,
+                                             func_st + shift)
+
+        self.data[true_start:true_end] = ev_func.get_bytearray()
+
+        # for i in range(0x10):
+        #     is_linked = self._function_is_linked(obj_id, i)
+        #     is_empty = self._function_is_empty(obj_id, i)
+        #     start = self.get_function_start(obj_id, i)
+
+        #     print(f'Function {i:02X}: {start+1:04X}, empty={is_empty}, '
+        #           f'linked={is_linked}')
+
+    def set_function_old(self, obj_id: int, func_id: int,
+                         ev_func: EF):
         '''Sets the given EventFunction in the script.'''
-        
+
         # The main difficulty is figuring out where the function should
         # actually begin.  The default behavior of CT scripts is that
         # unused functions are given the starting point of the last used
@@ -841,8 +916,6 @@ class Event:
         # functions afterwards.
         for ptr in range(func_st_ptr, last_ptr, 2):
             self.data[ptr:ptr+2] = to_little_endian(func_st, 2)
-
-
     # End set_function
 
     # delete a whole dang object.  Needed for cleaning up some scripts with
@@ -876,8 +949,8 @@ class Event:
             self.data[ptr:ptr+2] = to_little_endian(ptr_loc-obj_len-32, 2)
 
         # delete object data and pointers
-        del(self.data[start:end])
-        del(self.data[32*obj_id:32*(obj_id+1)])
+        del self.data[start:end]
+        del self.data[32*obj_id:32*(obj_id+1)]
 
         # update object count
         self.num_objects -= 1
@@ -890,7 +963,7 @@ class Event:
         start = self.get_function_start(0, 0)
         end = self.get_function_end(0, 0)
 
-        pos, _ = self.find_command([0xB8], start, end)
+        pos, _ = self.find_command_opt([0xB8], start, end)
 
         # TODO: Worry whether there are multiple string index commands.
         #       Should keep searching and delete extra ones.
@@ -908,9 +981,15 @@ class Event:
             str_ind_bytes = to_little_endian(rom_ptr, 3)
             self.data[pos+1:pos+4] = str_ind_bytes
 
-    def find_command(self, cmd_ids: list[int],
-                     start_pos: int = None,
-                     end_pos: int = None) -> (int, EC):
+    def find_command_opt(
+            self, cmd_ids: list[int],
+            start_pos: Optional[int] = None,
+            end_pos: Optional[int] = None
+    ) -> Tuple[Optional[int], EC]:
+        '''
+        A version of find_command which will return None if the command is
+        not found.
+        '''
 
         if start_pos is None or start_pos < 0:
             start_pos = self.get_object_start(0)
@@ -929,10 +1008,34 @@ class Event:
 
             pos += len(cmd)
 
-        return (None, None)
+        # returning colorcrash so mypy doesn't want Optional[Event]
+        return (None, EC.get_blank_command(1))
 
-    def find_exact_command(self, find_cmd: EC, start_pos: int = None,
-                           end_pos: int = None) -> int:
+    def find_command(
+            self, cmd_ids: list[int],
+            start_pos: Optional[int] = None,
+            end_pos: Optional[int] = None
+    ) -> Tuple[int, EC]:
+        '''
+        A version of find_command that will always return a position and
+        command.  Will raise CommandNotFoundException if the command can not
+        be found.
+        '''
+        ret_pos, ret_cmd = self.find_command_opt(cmd_ids, start_pos, end_pos)
+
+        if ret_pos is None:
+            raise CommandNotFoundException
+
+        return ret_pos, ret_cmd
+
+    def find_exact_command_opt(
+            self, find_cmd: EC,
+            start_pos: Optional[int] = None,
+            end_pos: Optional[int] = None) -> Optional[int]:
+        '''
+        Version of find_exact_command which will return None if the command
+        is not found.
+        '''
 
         if start_pos is None or start_pos < 0:
             start_pos = self.get_object_start(0)
@@ -948,14 +1051,32 @@ class Event:
 
             if cmd == find_cmd:
                 return pos
-            elif (cmd.command in jump_cmds and
-                  cmd.command == find_cmd.command and
-                  cmd.args[0:-1] == find_cmd.args[0:-1]):
+            if (
+                    cmd.command in jump_cmds and
+                    cmd.command == find_cmd.command and
+                    cmd.args[0:-1] == find_cmd.args[0:-1]
+            ):
                 return pos
 
             pos += len(cmd)
 
         return None
+
+    def find_exact_command(
+            self, find_cmd: EC,
+            start_pos: Optional[int] = None,
+            end_pos: Optional[int] = None) -> int:
+        '''
+        Finds the command given.  Does not match the exact bytes jumped if
+        given a jump command.  Raises CommandNotFoundException if the command
+        is not found.
+        '''
+        pos = self.find_exact_command_opt(find_cmd, start_pos, end_pos)
+
+        if pos is None:
+            raise CommandNotFoundException
+
+        return pos
 
     # Helper method to shift all jumps by a given amount.  Typically this
     # is called for removals/insertions.
@@ -973,34 +1094,49 @@ class Event:
                       after_pos: int,
                       shift: int):
 
-        pos = self.get_object_start(0)
+        pos: Optional[int] = self.get_object_start(0)
 
         jmp_cmds = EC.fwd_jump_commands + EC.back_jump_commands
 
         while True:
             # Find the next jump command
-            (pos, cmd) = self.find_command(jmp_cmds, pos)
+            (pos, cmd) = self.find_command_opt(jmp_cmds, pos)
 
             if pos is None:
                 break
+
+            jump_mult = 2*(cmd.command in EC.fwd_jump_commands)-1
+            jump_target = pos + len(cmd) + cmd.args[-1]*jump_mult - 1
+
+            # For backwards jumps, we need to count the bytes of the command
+            # within the bounds of the jump block.
+            cmd_bound = pos
+            if jump_mult == -1:
+                cmd_bound += len(cmd)
+
+            # This has been wrong a few times.  Let's be clear.
+            # We only shift if [before_pos, after_pos) is contained in
+            # (start, end).  We don't shift when before_pos == start
+            # because this means either the insertion will happen prior
+            # to the jump (before_pos == after_pos) or the deletion would
+            # include the jump command.
+            start = min(cmd_bound, jump_target)
+            end = max(cmd_bound, jump_target)
+
+            if before_pos == after_pos:
+                can_shift_aft = (end > after_pos)
             else:
-                jump_mult = 2*(cmd.command in EC.fwd_jump_commands)-1
-                jump_target = pos + len(cmd) + cmd.args[-1]*jump_mult - 1
+                can_shift_aft = (end >= after_pos)
 
-                st = min(jump_target, pos)
-                end = max(jump_target, pos)
+            if can_shift_aft and start < before_pos:
+                arg_offset = len(cmd) - cmd.arg_lens[-1]
+                self.data[pos+arg_offset] += shift
+            else:
+                pass
+                # print('not shifting')
+                # input()
 
-                # the >= and < are due to treating [before_pos, after_pos)
-                # as a half open interval (as python tends to do)
-                if end >= after_pos and st < before_pos:
-                    arg_offset = len(cmd) - cmd.arg_lens[-1]
-                    self.data[pos+arg_offset] += shift
-                else:
-                    pass
-                    # print('not shifting')
-                    # input()
-
-                pos += len(cmd)
+            pos += len(cmd)
 
     # Helper method for dealing with insertions and deletions.
     # All function starts strictly exceeding start_thresh will be shifted
@@ -1022,20 +1158,60 @@ class Event:
                 self.data[ptr:ptr+2] = to_little_endian(ptr_loc+shift, 2)
 
     def __shift_calls_back(self, deleted_obj: int):
-        pos = self.get_function_start(0, 0)
+        pos: Optional[int] = self.get_function_start(0, 0)
         end = len(self.data)
         while True:
-            (pos, cmd) = self.find_command([2, 3, 4],
-                                           pos, end)
+            (pos, cmd) = self.find_command_opt([2, 3, 4],
+                                               pos, end)
             if pos is None:
                 break
-            else:
-                if cmd.args[0] > 2*deleted_obj:
-                    # print(f"shifted [{pos:04X}] " + str(cmd))
-                    # input()
-                    self.data[pos+1] -= 2
 
-                pos += len(cmd)
+            if cmd.args[0] > 2*deleted_obj:
+                # print(f"shifted [{pos:04X}] " + str(cmd))
+                # input()
+                self.data[pos+1] -= 2
+
+            pos += len(cmd)
+
+    def __shift_calls_forward(self, inserted_obj: int):
+        pos: Optional[int] = self.get_function_start(0, 0)
+        end = len(self.data)
+        while True:
+            (pos, cmd) = self.find_command_opt([2, 3, 4],
+                                               pos, end)
+            if pos is None:
+                break
+
+            if cmd.args[0] > 2*inserted_obj:
+                # print(f"shifted [{pos:04X}] " + str(cmd))
+                # input()
+                self.data[pos+1] += 2
+
+            pos += len(cmd)
+
+    def replace_command(self, from_cmd: EC, to_cmd: EC,
+                        start: Optional[int] = None,
+                        end: Optional[int] = None):
+        if start is None:
+            start = self.get_object_start(0)
+
+        if end is None:
+            end = len(self.data)
+
+        if from_cmd == to_cmd:
+            return
+
+        pos: Optional[int] = start
+        while True:
+            pos = self.find_exact_command_opt(from_cmd, start, end)
+
+            if pos is None:
+                break
+
+            self.insert_commands(to_cmd.to_bytearray(), pos)
+            pos += len(to_cmd)
+
+            self.delete_commands(pos, 1)
 
     # This is for short removals
     def delete_commands(self, del_pos: int, num_commands: int = 1):
@@ -1043,10 +1219,10 @@ class Event:
         pos = del_pos
         cmd_len = 0
 
-        for i in range(num_commands):
+        for _ in range(num_commands):
             if pos >= len(self.data):
                 print("Error: Deleting out of script's range.")
-                exit()
+                raise ValueError
 
             cmd = get_command(self.data, pos)
             cmd_len += len(cmd)
@@ -1061,25 +1237,59 @@ class Event:
         self.__shift_starts(start_thresh=del_pos,
                             shift=-cmd_len)
 
-        del(self.data[del_pos:del_pos+cmd_len])
+        del self.data[del_pos:del_pos+cmd_len]
 
-    def delete_commands_range(self, del_start_pos, del_end_pos):
+    def delete_commands_range(self, del_start_pos: int, del_end_pos: int):
+        print("Deleting {:02X}-{:02X}".format(del_start_pos, del_end_pos))
+        if del_start_pos > del_end_pos:
+            raise ValueError("Start after end.")
+
         pos = del_start_pos
         length_to_delete = del_end_pos - del_start_pos
         deleted_length = 0
         while deleted_length < length_to_delete:
             cmd = get_command(self.data, pos)
+            print("Deleting {}".format(cmd))
             self.delete_commands(pos)
             deleted_length += len(cmd)
 
         if deleted_length != length_to_delete:
             print('Warning: Last deleted command exceeded del_end_pos')
 
-    def delete_command_from_function(self,
-                                     cmd_ids: list[int],
-                                     obj_id: int, fn_id: int,
-                                     start: int = None,
-                                     end: int = None) -> int:
+    def delete_jump_block(self, pos: int):
+        '''Delete the conditional block beginning at the given offset.'''
+        cmd_id = self.data[pos]
+        if cmd_id not in EC.fwd_jump_commands:
+            raise ValueError("Position does not point to a jump")
+
+        cmd = get_command(self.data, pos)
+        jump_bytes = cmd.args[-1]
+        target = pos + jump_bytes + len(cmd) - 1
+
+        self.delete_commands_range(pos, target)
+
+    def get_jump_block(self, pos: int, include_if: bool = False) -> EF:
+        '''Return the contents of a conditional block as an EventFunction'''
+        cmd_id = self.data[pos]
+        if cmd_id not in EC.fwd_jump_commands:
+            raise ValueError("Position does not point to a jump")
+
+        cmd = get_command(self.data, pos)
+        jump_bytes = cmd.args[-1]
+        target = pos + jump_bytes + len(cmd) - 1
+
+        start = pos
+        if not include_if:
+            start += len(cmd)
+
+        return EF.from_bytearray(self.data[start: target])
+
+    def delete_command_from_function(
+            self,
+            cmd_ids: list[int],
+            obj_id: int, fn_id: int,
+            start: Optional[int] = None,
+            end: Optional[int] = None) -> Optional[int]:
         find_start = self.get_function_start(obj_id, fn_id)
         find_end = self.get_function_end(obj_id, fn_id)
 
@@ -1089,14 +1299,14 @@ class Event:
         if end is not None and find_start < end < find_end:
             find_end = end
 
-        pos, _ = self.find_command(cmd_ids, find_start, find_end)
+        pos, _ = self.find_command_opt(cmd_ids, find_start, find_end)
         if pos is not None:
             self.delete_commands(pos, 1)
 
         return pos
 
     # This is for short additions.  In particular no string additions are
-    # allowed here.  For larger additions, use insert_script, remove_object.
+    # allowed here.
     def insert_commands(self, new_commands: bytearray, ins_position: int):
         # First, look for jump commands prior to the position that jump after
         # the position
@@ -1109,73 +1319,24 @@ class Event:
         self.__shift_jumps(ins_position, ins_position, len(new_commands))
         self.__shift_starts(ins_position, len(new_commands))
 
-        '''
-        pos = self.get_object_start(0)
-        while pos < ins_position:
-            cmd = get_command(self.data, pos)
-
-            # print(f"[{pos:04X}] {cmd}")
-            # Check for jumps that go over the insertion point
-            # bytes to jump is always in last argument
-            if cmd.command in EC.fwd_jump_commands:
-
-                jump_target = pos + len(cmd) + cmd.args[-1] - 1
-                if jump_target > ins_position:
-
-                    arg_offset = len(cmd) - cmd.arg_lens[-1]
-                    self.data[pos + arg_offset] += len(new_commands)
-
-                    # Test:
-                    # new_cmd = get_command(self.data, pos)
-                    # print(f"New: [{pos:04X}] {new_cmd}")
-
-            pos += len(cmd)
-
-        # print("done forward jumps")
-        # Now check for backwards jump commands after the insertion point that
-        # jump before the insertion point
-
-        pos = ins_position
-        while pos < len(self.data):
-            cmd = get_command(self.data, pos)
-            # print(f"[{pos:04X}] {cmd}")
-
-            if cmd.command in EC.back_jump_commands:
-                jump_target = pos - cmd.args[-1] + len(cmd) - 1
-                # print(f"{jump_target:04X}")
-
-                # We assume our inserted commands are not supposed to be
-                # the jump target.  So we use <.
-                if jump_target < ins_position:
-                    arg_offset = len(cmd) - cmd.arg_lens[-1]
-                    self.data[pos+arg_offset] += len(new_commands)
-
-                    # Test:
-                    # new_cmd = get_command(self.data, pos)
-                    # print(f"[{pos:04X}] {new_cmd}")
-
-            pos += len(cmd)
-
-        # print("done backward jumps")
-        '''
         self.data[ins_position:ins_position] = new_commands
 
-        '''
-        # Every function start pointer whose value exceeds the insertion
-        # point should be shifted
 
-        # print(f"Ins Pos: {ins_position: 04X}")
-        for ptr in range(32*self.num_objects-2, -2, -2):
-            ptr_loc = get_value_from_bytes(self.data[ptr:ptr+2])
+    @staticmethod
+    def _get_flux_path(filename: Union[Path, str]) -> Path:
+        '''Coerce filename path to use flux from "flux" directory in package instead of relative to CWD.
 
-            if ptr_loc > ins_position:
-                self.data[ptr:ptr+2] = \
-                    to_little_endian(ptr_loc+len(new_commands), 2)
+        If filename starts with './flux/', it is replaced with the location of "flux" directory.
         '''
+        parts = Path(filename).parts
+        if parts[0] == 'flux':
+            # strip off leading './flux/' if included in filename
+            parts = parts[1:]
+        return Path(Event._flux_path, *parts)
 
 
 # Find the length of a location's event script
-def get_compressed_event_length(rom: bytearray, loc_id: int) -> int:
+def get_compressed_event_length(rom: ByteString, loc_id: int) -> int:
     ptr = get_loc_event_ptr(rom, loc_id)
     return get_compressed_length(rom, ptr)
 
@@ -1192,25 +1353,25 @@ class ScriptManager:
                  event_data_ptr=0x3CF9F0):
         self.fsrom = fsrom
 
-        self.script_dict = {x: None for x in list(LocID)}
-        self.orig_len_dict = {x: None for x in list(LocID)}
+        self.script_dict: dict[LocID, Event] = {}
+        self.orig_len_dict: dict[LocID, int] = {}
 
         # TODO: Just read the ptr from the rom since we have it.
         self.loc_data_ptr = loc_data_ptr
         self.event_data_ptr = event_data_ptr
 
-        for x in location_list:
-            self.script_dict[x] = \
-                Event.from_rom_location(self.fsrom.getbuffer(), x)
-            self.orig_len_dict[x] = \
-                get_compressed_event_length(self.fsrom.getbuffer(), x)
+        for loc_id in location_list:
+            self.script_dict[loc_id] = \
+                Event.from_rom_location(self.fsrom.getbuffer(), loc_id)
+            self.orig_len_dict[loc_id] = \
+                get_compressed_event_length(self.fsrom.getbuffer(), loc_id)
 
     # A note:  If a script obtained by get_script is edited it will edit
     # the copy in the manager.  This is how I think it should be since
     # making copies, editing copies and then re-setting the manager is
     # clunky.
     def get_script(self, loc_id: LocID) -> Event:
-        if not self.script_dict[loc_id]:
+        if loc_id not in self.script_dict:
             self.script_dict[loc_id] = \
                 Event.from_rom_location(self.fsrom.getbuffer(), loc_id)
             self.orig_len_dict[loc_id] = \
@@ -1219,9 +1380,7 @@ class ScriptManager:
         return self.script_dict[loc_id]
 
     def set_script(self, script, loc_id: LocID):
-        if loc_id not in self.script_dict.keys() or \
-           self.script_dict[loc_id] is None:
-
+        if loc_id not in self.script_dict:
             self.orig_len_dict[loc_id] = \
                 get_compressed_event_length(self.fsrom.getbuffer(), loc_id)
 
@@ -1300,7 +1459,7 @@ class ScriptManager:
 
         # When the script is written, update the orig len and modified_strings.
         # Just in case we end up modifying and writing again.
-        self.modified_strings = False
+        script.modified_strings = False
         self.orig_len_dict[loc_id] = len(compr_event)
     # End of write_script_to_rom
 # End class ScriptManager

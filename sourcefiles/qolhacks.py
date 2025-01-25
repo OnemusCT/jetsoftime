@@ -1,14 +1,18 @@
-# File for quality of life hacks
+'''Module for quality of life hacks'''
+from typing import Optional, Callable
+import bossrandotypes as rotypes
 
 import ctevent
 import ctenums
+
+from treasures import treasuretypes as ttypes
 
 from ctrom import CTRom
 import randoconfig as cfg
 import randosettings as rset
 
 
-class ScriptTabTreasure(cfg.ScriptTreasure):
+class ScriptTabTreasure(ttypes.ScriptTreasure):
     '''ScriptTreasure with extra method for removing exploremode offs.'''
 
     def remove_pause(self, ctrom: CTRom):
@@ -21,25 +25,17 @@ class ScriptTabTreasure(cfg.ScriptTreasure):
         start = script.get_function_start(self.object_id, self.function_id)
         end = script.get_function_end(self.object_id, self.function_id)
 
-        pos = start
+        pos: Optional[int] = start
         num_removed = 0
         while True:
             # exploremode toggle commands are 0xE3.  We're nuking them
-            pos, _ = script.find_command([0xE3], start, end)
+            pos, _ = script.find_command_opt([0xE3], start, end)
 
             if pos is None:
                 break
 
             script.delete_commands(pos, 1)
             num_removed += 1
-
-        # print(f"Num removed: {num_removed}")
-        if num_removed % 2 != 0:
-            # This is not a reliable indicator.  The 'PartyFollow' command can
-            # also undo 'ExploreMode Off' as in the Magus Castle Dungeons.
-            # print("Warning: Removed an odd number of exploremode commands")
-            # input()
-            pass
 
         # Now make sure that the flag set is after the textbox.  Otherwise
         # it's possible to pick the same tab up multiple times.
@@ -48,12 +44,8 @@ class ScriptTabTreasure(cfg.ScriptTreasure):
         pos_flag, flag_cmd = script.find_command([0x65], start, end)
 
         # 0xBB, 0xC1, 0xC2 are the basic textbox commands
-        pos_text, text_cmd = script.find_command([0xBB, 0xC1, 0xC2],
-                                                 start, end)
-
-        if pos_flag is None or pos_text is None:
-            print(f'Error finding flag set or text box in {self.location}')
-            raise SystemExit
+        pos_text, _ = script.find_command([0xBB, 0xC1, 0xC2],
+                                          start, end)
 
         # If the item looted flag is set after the texbox, then the player
         # can keep the textbox up, leave the screen, and avoid setting the
@@ -73,6 +65,12 @@ class ScriptTabTreasure(cfg.ScriptTreasure):
 #  2) Add an exploremode on command after checking for pop, etc
 #  3) Pray calling exploremode on when it's already on doesn't break things.
 class TomasGraveTreasure(ScriptTabTreasure):
+    '''
+    Special class to handle the tab behind Toma's grave.
+
+    Since this tab is tied to the activate function of the grave, we have to
+    ensure that the normal activation of the grave works.
+    '''
 
     def remove_pause(self, ctrom: CTRom):
 
@@ -86,8 +84,9 @@ class TomasGraveTreasure(ScriptTabTreasure):
         if script.data[pos] == 0xE3:
             script.delete_commands(pos, 1)
         else:
-            print("Error: Couldn't find initial exploremode command.")
-            exit()
+            raise ctevent.CommandNotFoundException(
+                "Couldn't find initial exploremode command."
+            )
 
         # insert an exploremode off after checks for pop
         # marker is scrollscreen (0xE7) 00 00
@@ -95,30 +94,32 @@ class TomasGraveTreasure(ScriptTabTreasure):
         pos = script.find_exact_command(scroll_screen, pos, end)
 
         if pos is None:
-            print("Error: couldn't find scroll screen")
-            exit()
+            raise ctevent.CommandNotFoundException(
+                "Couldn't find scroll screen"
+            )
 
         explore_off = ctevent.EC.generic_one_arg(0xE3, 0)
         script.insert_commands(explore_off.to_bytearray(), pos)
 
 
-# Trick the game into thinking P1 has the SightScope equipped, for enemy health
-# to always be visible.
-def force_sightscope_on(ctrom: CTRom, settings: rset.Settings):
-    if rset.GameFlags.VISIBLE_HEALTH in settings.gameflags:
-        # Seek to the location in the ROM after the game checks if P1's
-        # accessory is a SightScope
-        ctrom.rom_data.seek(0x0CF039)
-        # Ignore the result of that comparison and evaluate to always true, by
-        # overwriting the BEQ (branch-if-equal) to BRA (branch-always)
-        ctrom.rom_data.write(bytes([0x80]))
+def force_sightscope_on(ctrom: CTRom):
+    '''
+    Trick the game into thinking P1 has the SightScope equipped, for enemy
+    health to always be visible.
+    '''
+
+    # Seek to the location in the ROM after the game checks if P1's
+    # accessory is a SightScope
+    ctrom.rom_data.seek(0x0CF039)
+    # Ignore the result of that comparison and evaluate to always true, by
+    # overwriting the BEQ (branch-if-equal) to BRA (branch-always)
+    ctrom.rom_data.write(bytes([0x80]))
 
 
-def fast_tab_pickup(ctrom: CTRom, settings: rset.Settings):
-
-    if rset.GameFlags.FAST_TABS not in settings.gameflags:
-        return
-
+def fast_tab_pickup(ctrom: CTRom):
+    '''
+    Remove pauses from all tabs except death peak swag tab.
+    '''
     TID = ctenums.TreasureID
     LocID = ctenums.LocID
     ItemID = ctenums.ItemID
@@ -129,94 +130,94 @@ def fast_tab_pickup(ctrom: CTRom, settings: rset.Settings):
     slow_tabs = {
         TID.GUARDIA_FOREST_POWER_TAB_600: ScriptTabTreasure(
             location=LocID.GUARDIA_FOREST_600,
-            object_id=0x3F,
+            object_id=0x3F-6,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.GUARDIA_FOREST_POWER_TAB_1000: ScriptTabTreasure(
             location=LocID.GUARDIA_FOREST_1000,
             object_id=0x26,
             function_id=0x01,
             item_num=1,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.PORRE_MARKET_600_POWER_TAB: ScriptTabTreasure(
             location=LocID.PORRE_MARKET_600,
             object_id=0x0C,
             function_id=0x01,
             item_num=1,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.MANORIA_CONFINEMENT_POWER_TAB: ScriptTabTreasure(
             location=LocID.MANORIA_CONFINEMENT,
             object_id=0x0A,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.TOMAS_GRAVE_SPEED_TAB: TomasGraveTreasure(
             location=LocID.WEST_CAPE,
             object_id=0x08,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.SPEED_TAB
+            reward=ItemID.SPEED_TAB
         ),
         TID.DENADORO_MTS_SPEED_TAB: ScriptTabTreasure(
             location=LocID.DENADORO_WEST_FACE,
             object_id=0x09,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.SPEED_TAB
+            reward=ItemID.SPEED_TAB
         ),
         TID.GIANTS_CLAW_CAVERNS_POWER_TAB: ScriptTabTreasure(
             location=LocID.GIANTS_CLAW_CAVERNS,
             object_id=0x0D,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.GIANTS_CLAW_ENTRANCE_POWER_TAB: ScriptTabTreasure(
             location=LocID.GIANTS_CLAW_ENTRANCE,
             object_id=0x0B,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.GIANTS_CLAW_TRAPS_POWER_TAB: ScriptTabTreasure(
             location=LocID.ANCIENT_TYRANO_LAIR_TRAPS,
             object_id=0x15,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.POWER_TAB
+            reward=ItemID.POWER_TAB
         ),
         TID.MAGUS_CASTLE_DUNGEONS_MAGIC_TAB: ScriptTabTreasure(
             location=LocID.MAGUS_CASTLE_DUNGEONS,
             object_id=0x08,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.MAGIC_TAB
+            reward=ItemID.MAGIC_TAB
         ),
         TID.MAGUS_CASTLE_FLEA_MAGIC_TAB: ScriptTabTreasure(
             location=LocID.MAGUS_CASTLE_FLEA,
             object_id=0x0D,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.SPEED_TAB
+            reward=ItemID.SPEED_TAB
         ),
         TID.ARRIS_DOME_SEALED_POWER_TAB: ScriptTabTreasure(
             location=LocID.ARRIS_DOME_SEALED_ROOM,
             object_id=0x08,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.SPEED_TAB
+            reward=ItemID.SPEED_TAB
         ),
         TID.TRANN_DOME_SEALED_MAGIC_TAB: ScriptTabTreasure(
             location=LocID.TRANN_DOME_SEALED_ROOM,
             object_id=0x08,
             function_id=0x01,
             item_num=0,
-            held_item=ItemID.SPEED_TAB
+            reward=ItemID.SPEED_TAB
         )
     }
 
@@ -226,16 +227,22 @@ def fast_tab_pickup(ctrom: CTRom, settings: rset.Settings):
 
 
 def enable_boss_sightscope(config: cfg.RandoConfig):
-    
-    for boss in list(ctenums.BossID):
+    '''
+    Make all bosses able to be sightscoped.
+    '''
+    for boss in list(rotypes.BossID):
         boss_data = config.boss_data_dict[boss]
-        for part in set(boss_data.scheme.ids):
-            config.enemy_dict[part].can_sightscope = True
+        for part in set(boss_data.parts):
+            config.enemy_dict[part.enemy_id].can_sightscope = True
 
 
 def set_guaranteed_drops(ctrom: CTRom):
-    # If charm == drop, item drops are guaranteed.  However, when the
-    # charm and drop are different, there is a chance of no drop.
+    '''
+    If charm == drop, item drops are guaranteed.  However, when the charm and
+    drop are different, there is a chance of no drop.  This function makes the
+    drop always happen regardless of the charm.
+    '''
+
     # It looks like CT checks (random_num % 100) < 90
     # The check is:
     # $FD/AC27 C9 5A       CMP #$5A
@@ -252,10 +259,11 @@ def set_guaranteed_drops(ctrom: CTRom):
     rom.write(bytes([0xFF]))
 
 
-def set_free_menu_glitch(ct_rom: CTRom, settings: rset.Settings):
-    if rset.GameFlags.FREE_MENU_GLITCH not in settings.gameflags:
-        return
-
+def set_free_menu_glitch(ct_rom: CTRom):
+    '''
+    Adds a few seconds of pause to allow menu access when transitioning from
+    (1) Zeal1 to Mammon M and (2) Lavos2 to Lavos3.
+    '''
     EF = ctevent.EF
     EC = ctevent.EC
 
@@ -281,9 +289,7 @@ def set_free_menu_glitch(ct_rom: CTRom, settings: rset.Settings):
     while True:
         pos, cmd = script.find_command([0xDF], pos, end)
 
-        if pos is None:
-            raise ValueError
-        elif cmd.args[0] & 0x1FF == 0x1DF:
+        if cmd.args[0] & 0x1FF == 0x1DF:
             break
 
         pos += len(cmd)
@@ -293,8 +299,19 @@ def set_free_menu_glitch(ct_rom: CTRom, settings: rset.Settings):
 
 # After writing additional hacks, put them here. Based on the settings, they
 # will or will not modify the ROM.
-def attempt_all_qol_hacks(ctrom: CTRom, settings: rset.Settings):
-    force_sightscope_on(ctrom, settings)
-    fast_tab_pickup(ctrom, settings)
-    set_guaranteed_drops(ctrom, settings)
-    set_free_menu_glitch(ctrom, settings)
+def attempt_all_qol_hacks(ct_rom: CTRom, settings: rset.Settings):
+    '''
+    Apply all qol hacks permitted by the settings.
+    '''
+    set_guaranteed_drops(ct_rom)
+
+    GF = rset.GameFlags
+    flag_fn_dict: dict[rset.GameFlags, Callable[[CTRom], None]] = {
+        GF.VISIBLE_HEALTH: force_sightscope_on,
+        GF.FAST_TABS: fast_tab_pickup,
+        GF.FREE_MENU_GLITCH: set_free_menu_glitch
+    }
+
+    for flag, func in flag_fn_dict.items():
+        if flag in settings.gameflags:
+            func(ct_rom)

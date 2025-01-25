@@ -1,11 +1,15 @@
 '''
 Module for preconfiguring in-game options at compile time
 '''
+from typing import TYPE_CHECKING, Dict, Optional
 
 import byteops
 from ctenums import ActionMap, InputMap
 from ctrom import CTRom
 from ctevent import FSWriteType
+
+if TYPE_CHECKING:
+    import randosettings as rset
 
 class ControllerBinds:
     '''
@@ -50,7 +54,7 @@ class ControllerBinds:
     BUTTONS_OFFSET = 0x02FCA9
     BUTTONS_LENGTH = 8
 
-    def __init__(self, data: bytearray = None):
+    def __init__(self, data: Optional[bytearray] = None):
 
         self.mappings = self.get_vanilla()
         
@@ -94,7 +98,7 @@ class ControllerBinds:
 
         try:
             check = {x: binds[x] for x in ActionMap}
-        except:
+        except KeyError:
             return False
 
         assigned = [y for x, y in check.items()]
@@ -118,8 +122,8 @@ class ControllerBinds:
         
         rom.seek(offset)
         data = rom.read(cls.BUTTONS_LENGTH)
-       
-        return cls.to_bytearray(data)
+
+        return cls(bytearray(data))
 
 
     def to_bytearray(self, data = None):
@@ -137,20 +141,20 @@ class ControllerBinds:
                 
         return ret
 
-    def update_from_bytes(self, bytes: bytearray):
+    def update_from_bytes(self, byte_data: bytearray):
         '''
         Updates button bindings in place given bytearray; bytearray assumed to be ordered in the same way as out
         
         '''
-        if not (8 <= len(bytes) <= 11):
+        if not (8 <= len(byte_data) <= 11):
             return
 
-        bytes = bytes[-8:]
+        byte_data = byte_data[-8:]
 
-        for idx, byte in zip(ActionMap, bytes):
-            for input in InputMap:
-                if byte == input:
-                    self.mappings[idx] = input
+        for idx, byte in zip(ActionMap, byte_data):
+            for input_id in InputMap:
+                if byte == input_id:
+                    self.mappings[idx] = input_id
                     break
     
     def reset_to_vanilla(self):
@@ -229,7 +233,7 @@ class CTOpts:
     CONFIG_OFFSET = 0x02FCA6
     CONFIG_LENGTH = 3
     
-    def __init__(self,  data: bytearray = None):
+    def __init__(self,  data: Optional[bytearray] = None):
                 
         self._data = self.get_vanilla()
         self.controller_binds = ControllerBinds()
@@ -440,6 +444,9 @@ class CTOpts:
         
         return ret
 
+    def __eq__(self, other) -> bool:
+        return all(getattr(other, key, None) == value for key, value in self)
+
     def __iter__(self):
         
         ret = {
@@ -456,7 +463,6 @@ class CTOpts:
             'battle_gauge_style': self.battle_gauge_style,
             'consistent_paging': self.consistent_paging
         }
-        
 
         return iter(ret.items())
 
@@ -498,6 +504,9 @@ class CTOpts:
         
         rom.seek(0x011483 + 1) # AND #$10
         rom.write(0x20.to_bytes(1, 'little'))
+
+    def to_jot_json(self) -> Dict[str, 'rset.JSONPrimitive']:
+        return {k: v for k, v in self}
         
 
 if __name__ == '__main__':

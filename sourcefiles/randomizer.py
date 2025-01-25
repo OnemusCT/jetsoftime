@@ -1,16 +1,34 @@
+'''
+The Chrono Trigger: Jets of Time Randomizer
+'''
 from __future__ import annotations
 
-import os
+import random
 import pickle
 import sys
 import json
+import textwrap
+import typing
 
+from pathlib import Path
+from typing import Optional, Union
+
+import cli.arguments as arguments
+import charassign
+import eventfunction
+
+from base import chesttext, basepatch
+
+import enemystats
+import itemdata
 import itemrando
-import treasurewriter
-import shopwriter
+from characters import pcrecruit, ctpcstats
+from maps import mapmangler
+from treasures import treasurewriter, treasuretypes
+from shops import shopwriter
 import logicwriters as logicwriter
-import random as rand
 import bossrandoevent as bossrando
+import bossrandotypes as rotypes
 import bossscaler
 import tabchange as tabwriter
 import fastmagic
@@ -18,23 +36,30 @@ import fastpendant
 import charrando
 import roboribbon
 import techrandomizer
+import elementrando
 import qolhacks
 import cosmetichacks
-import bucketfragment
 import iceage
 import legacyofcyrus
 import mystery
-import vanillarando
+from vanillarando import vanillarando
 import epochfail
 import flashreduce
 import seedhash
+import prismshard
+import scriptshortener
+import bucketlist
+import techdescs
+import techdamagerando
 
 import byteops
 import ctenums
 import ctevent
+import eventcommand
 from ctrom import CTRom
 import ctstrings
 import enemyrewards
+
 
 # from freespace import FSWriteType
 import randoconfig as cfg
@@ -43,34 +68,85 @@ import randosettings as rset
 from jotjson import JOTJSONEncoder
 
 
-class NoSettingsException(Exception):
-    pass
+class GenerationFailedException(Exception):
+    '''Exception to raise when generating the randomized rom fails.'''
 
 
-class NoConfigException(Exception):
-    pass
+class NoSettingsException(GenerationFailedException):
+    '''Raise when trying to generate a config or rom with no settings.'''
+
+
+class NoConfigException(GenerationFailedException):
+    '''Raise when trying to generate a rom with no config set.'''
 
 
 class Randomizer:
+    '''
+    Main randomizer class.  Produces a random Chrono Trigger rom given a
+    vanilla rom and settings object.
 
-    def __init__(self, rom: bytearray, is_vanilla: bool = True,
-                 settings: rset.Settings = None,
-                 config: cfg.RandoConfig = None):
+    Basic usage:
+        # Obtain ct_vanilla.sfc somehow.  Legally of course.
+        with open('ct_vanilla.sfc', 'rb') as infile:
+            ct_vanilla = infile.read()
 
+        settings = rset.Settings()  # Lots of options
+        out_rom = Randomizer.get_randmomized_rom(ct_vanilla, settings)
+        # out_rom has type bytes and can be written out.
+
+    Other usage:
+        # Obtain ct_vanilla.sfc and read it into bytes-like ct_vanilla
+        rando = Randomizer(ct_vanilla)
+        rando.settings = rset.Settings()  # Or whatever other settings.
+        rando.set_random_config()
+        rando.generate_rom()
+        out_rom = rando.get_generated_rom()
+    '''
+    _pickles_path: Path = Path(__file__).parent / 'pickles'
+
+    def __init__(self, rom: bytes, is_vanilla: bool = True,
+                 settings: Optional[rset.Settings] = None,
+                 config: Optional[cfg.RandoConfig] = None):
+        '''
+        Constructor for a Randomizer.
+
+        Args:
+            rom : bytes
+                A bytes-like object of the input rom.
+            is_vanilla: bool = True
+                Whether the rom is an unmodified rom.  Both headerless and
+                headered roms will be accepted if is_vanilla is True.  Using
+                non-vanilla roms is not supported.
+            settings: Optional[rset.Settings] = None
+                The rset.Settings object to use to generate the
+                cfg.Randoconfig. Or, if a config is provided, the settings
+                object used to generate it.
+            config: Optional[cfg.RandoConfig] = None
+                If a cfg.RandoConfig has already been generated, and you wish
+                to make a random rom based on that config, it can be provided
+                here.  Note, the settings(above) must be the same settings
+                (except cosmetic) used to generate the config, or rom
+                generation will likely fail.
+        '''
         # We want to keep a copy of the base rom around so that we can
         # generate many seeds from it.
         self.base_ctrom = CTRom(rom, ignore_checksum=not is_vanilla)
-        self.out_rom = None
+        self.out_rom: Optional[CTRom] = None
+        self.hash_string_bytes: Optional[bytes] = None
         self.has_generated = False
 
         self.settings = settings
         self.config = config
+
 
     # The randomizer will hold onto its last generated rom in self.out_rom
     # The settings and config are made properties so that I can update
     # whether out_rom correctly reflects the settings/config.
     @property
     def settings(self):
+        '''
+        The randomizer's settings.  Will reset generation if modified.
+        '''
         return self._settings
 
     @settings.setter
@@ -80,6 +156,10 @@ class Randomizer:
 
     @property
     def config(self):
+        '''
+        The randomizer's cfg.RandoConfig for writing the rom.  Will reset
+        generation if modified.
+        '''
         return self._config
 
     @config.setter
@@ -87,22 +167,19 @@ class Randomizer:
         self._config = new_config
         self.has_generated = False
 
-    # This would be used by a plando to set a non-random config.
-    # Should this exist now that config is a property?
-    def set_config(self, config: cfg.RandoConfig):
-        self.config = config
-        # TODO: Are there any sanity checks to apply to the config?
-
-    # Given the settings passed to the randomizer, give the randomizer a
-    # random RandoConfig object.
     def set_random_config(self):
+        '''
+        Use the Randomizer's settings to generate a random cfg.Randoconfig.
+        '''
         if self.settings is None:
             raise NoSettingsException
 
-        rand.seed(self.settings.seed)
+        random.seed(self.settings.seed)
 
         if rset.GameFlags.MYSTERY in self.settings.gameflags:
             self.settings = mystery.generate_mystery_settings(self.settings)
+
+        self.settings.fix_flag_conflicts()
 
         # Some of the config defaults (prices, techdb, enemy stats) are
         # read from the rom.  This routine partially patches a copy of the
@@ -114,21 +191,31 @@ class Randomizer:
 
         # An alternate approach is to build the base config with the pickles
         # provided.  You just have to make sure to redump any time time that
-        # patch.ips or hard.ips change.  Below is how you would use pickles.
+        # base_patch.ips or hard.ips change.  Demo below.
         '''
-        with open('./pickles/default_randoconfig.pickle', 'rb') as infile:
+        with self._get_pickle_path('default_randoconfig.pickle').open('rb') as infile:
             self.config = pickle.load(infile)
 
         if self.settings.enemy_difficulty == rset.Difficulty.HARD:
-            with open('./pickles/enemy_dict_hard.pickle', 'rb') as infile:
+            with self._get_pickle_path('enemy_dict_hard.pickle').open('rb') as infile:
                 self.config.enemy_dict = pickle.load(infile)
         '''
 
         # Character config.  Includes tech randomization and who can equip
         # which items.
+        elementrando.write_config(self.settings, self.config, random)
         charrando.write_config(self.settings, self.config)
+
         techrandomizer.write_tech_order_to_config(self.settings,
                                                   self.config)
+
+        # Tech Damage Rando can add duplicate effect headers for randomized powers.
+        # So we have to generate the combo tech descs before randomizing the single tech damage.
+        techdescs.update_combo_tech_descs(self.config.tech_db)
+        if rset.GameFlags.TECH_DAMAGE_RANDO in self.settings.gameflags:
+            techdamagerando.modify_all_single_techs(self.config.tech_db)
+        techdescs.update_single_tech_descs(self.config.tech_db)
+        techdescs.clean_up_desc_space(self.config.tech_db)
 
         # Fast Magic.  Should be fine before or after charrando.
         # Safest after.
@@ -160,8 +247,9 @@ class Randomizer:
         itemrando.write_item_prices_to_config(self.settings, self.config)
         itemrando.randomize_healing(self.settings, self.config)
         itemrando.randomize_accessories(self.settings, self.config)
-        itemrando.randomize_weapon_armor_stats(self.settings, self.config)
-        self.config.itemdb.update_all_descriptions()
+        # itemrando.randomize_weapon_armor_stats(self.settings, self.config)
+        itemrando.alt_gear_rando(self.settings, self.config)
+        self.config.item_db.update_all_descriptions()
 
         # Boss Rando
         bossrando.write_assignment_to_config(self.settings, self.config)
@@ -186,7 +274,7 @@ class Randomizer:
         tabwriter.write_tabs_to_config(self.settings, self.config)
 
         # Bucket
-        bucketfragment.write_fragments_to_config(self.settings, self.config)
+        bucketlist.add_objectives_to_config(self.settings, self.config)
 
         # Omen elevator
         self.__update_key_item_descs()
@@ -195,35 +283,36 @@ class Randomizer:
         # Ice age GG buffs if IA flag is present in settings.
         iceage.write_config(self.settings, self.config)
 
-    def rescale_bosses(self):
-        '''Reset enemy stats and redo boss scaling.'''
-        if self.settings is None:
-            raise NoSettingsException
+    @classmethod
+    def __set_fast_zeal_teleporters(cls, ct_rom: CTRom):
+        '''
+        Warp straight from the bottom of the mountain to the top.
+        '''
 
-        if self.config is None:
-            raise NoConfigException
+        EC = ctevent.EC
 
-        config = self.get_base_config_from_settings(
-            self.base_ctrom.rom_data.getbuffer(),
-            self.settings
+        script = ct_rom.script_manager.get_script(
+            ctenums.LocID.ZEAL_TELEPORTERS
         )
+        bot_loc_cmd = EC.change_location(ctenums.LocID.ZEAL_TELEPORTERS,
+                                         0x1F, 0x0E,
+                                         3, 1, False)
+        new_bot_loc_cmd = EC.change_location(ctenums.LocID.ZEAL_TELEPORTERS,
+                                             0x35, 0x0E,
+                                             3, 1, False)
 
-        for loc in self.config.boss_assign_dict:
-            boss = self.config.boss_assign_dict[loc]
-            scheme = self.config.boss_data_dict[boss].scheme
+        pos = script.find_exact_command(bot_loc_cmd)
+        script.data[pos:pos+len(bot_loc_cmd)] = new_bot_loc_cmd.to_bytearray()
 
-            for part in set(scheme.ids):
-                stats = self.config.enemy_dict[part]
-                charm = stats.charm_item
-                drop = stats.drop_item
+        top_loc_cmd = EC.change_location(ctenums.LocID.ZEAL_TELEPORTERS,
+                                         0x0A, 0x26,
+                                         3, 1, False)
+        new_top_loc_cmd = EC.change_location(ctenums.LocID.ZEAL_TELEPORTERS,
+                                             0x0A, 0xE,
+                                             3, 1, False)
 
-                config.enemy_dict[part].charm_item = charm
-                config.enemy_dict[part].drop_item = drop
-
-                self.config.enemy_dict[part] = config.enemy_dict[part]
-
-        bossrando.scale_bosses_given_assignment(self.settings, self.config)
-        bossscaler.set_boss_power(self.settings, self.config)
+        pos = script.find_exact_command(top_loc_cmd)
+        script.data[pos:pos+len(bot_loc_cmd)] = new_top_loc_cmd.to_bytearray()
 
     @classmethod
     def __set_bike_champions(
@@ -251,6 +340,7 @@ class Randomizer:
         script.strings[string_id] = new_ctstr
         script.modified_strings = True
 
+    @classmethod
     def __set_fair_racers(
             cls, ct_rom: CTRom,
             catalack_name: str,
@@ -292,19 +382,18 @@ class Randomizer:
         cmd = EC.assign_val_to_mem(0x7F, 0x7F01E0, 1)
         pos = script.get_object_start(0)
         pos = script.find_exact_command(cmd, pos)
-        pos += len(cmd)        
+        pos += len(cmd)
         script.delete_commands(pos, 5)
 
-
     @classmethod
-    def __set_active_wait_song(cls, ct_rom: CTRom, song_id = 3):
+    def __set_active_wait_song(cls, ct_rom: CTRom, song_id=3):
         '''
         Put a song (corridors of time default) at the active/wait screen.
         '''
         script = ct_rom.script_manager.get_script(
             ctenums.LocID.LOAD_SCREEN)
 
-        pos = script.get_object_start(0)
+        pos: Optional[int] = script.get_object_start(0)
 
         while True:
             pos, cmd = script.find_command([0xC8], pos)
@@ -315,7 +404,6 @@ class Randomizer:
 
         song_cmd = ctevent.EC.generic_one_arg(0xEA, song_id)
         script.insert_commands(song_cmd.to_bytearray(), pos)
-
 
     @classmethod
     def __set_fast_magus_castle(cls, ct_rom: CTRom):
@@ -372,7 +460,7 @@ class Randomizer:
         config = self.config
         IID = ctenums.ItemID
 
-        item_db = config.itemdb
+        item_db = config.item_db
         item_db[IID.GATE_KEY].set_desc_from_str(
             'Unlocks 65m BC (Medina imp closet)'
         )
@@ -417,31 +505,81 @@ class Randomizer:
             'Unlock Porre Mayor (Porre Elder)'
         )
 
+        item_db[IID.MOON_STONE].set_desc_from_str(
+            'Charge in Sun keep for 65,002,300 yrs'
+        )
+
+        item_db[IID.SUN_STONE].set_desc_from_str(
+            'Give to Melchior after King\'s Trial'
+        )
+
         medal_desc = item_db[IID.HERO_MEDAL].get_desc_as_str()
         medal_desc += ' (Frog\'s Chest)'
         item_db[IID.HERO_MEDAL].set_desc_from_str(medal_desc)
 
-        if self.settings.game_mode == rset.GameMode.VANILLA_RANDO:
+        gameflags = self.settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.UNLOCKED_SKYGATES in gameflags:
+            item_db[IID.JETSOFTIME].set_desc_from_str(
+                'Upgrade Epoch (Blackbird)'
+            )
+        if GF.ADD_BEKKLER_SPOT in gameflags:
             item_db[IID.C_TRIGGER].set_desc_from_str(
                 'Go DthPeak (KeeperDome), Bekkler'
             )
+        if GF.RESTORE_TOOLS in gameflags:
             item_db[IID.TOOLS].set_desc_from_str(
                 'Repair Ruins (Choras Cafe)'
-            )
-            item_db[IID.JETSOFTIME].set_desc_from_str(
-                'Upgrade Epoch (Snail Stop)'
             )
         else:
             grandleon_desc = item_db[IID.MASAMUNE_2].get_desc_as_str()
             grandleon_desc += ' (Tools)'
             item_db[IID.MASAMUNE_2].set_desc_from_str(grandleon_desc)
 
+        if GF.SPLIT_ARRIS_DOME in gameflags:
+            item_db[IID.SEED].set_desc_from_str(
+                'Give to Doan after CPU (Arris)'
+            )
+        if GF.RESTORE_JOHNNY_RACE in gameflags:
+            desc = 'Walk Lab32'
+            if GF.ADD_RACELOG_SPOT in gameflags:
+                desc += ' + RaceLog Box'
+
+            item_db[IID.BIKE_KEY].set_desc_from_str(desc)
+
+    def __accelerate_carpenter_quest(self, ct_rom: CTRom):
+        '''
+        Just repair the whole ruins on the first visit.
+        '''
+
+        script = ct_rom.script_manager.get_script(
+            ctenums.LocID.CHORAS_CARPENTER_600
+        )
+
+        EC = ctevent.EC
+        EF = ctevent.EF
+
+        hook_cmd = EC.set_bit(0x7F019F, 0x2)
+
+        hook_pos = script.find_exact_command(
+            hook_cmd,
+            script.get_function_start(8, 1)
+        ) + len(hook_cmd)
+
+        func = (
+            EF()
+            .add(EC.set_bit(0x7F019F, 0x04))
+            .add(EC.set_bit(0x7F019F, 0x08))
+        )
+        script.insert_commands(func.get_bytearray(), hook_pos)
+
     def __fix_northern_ruins_sealed(self, ct_rom: CTRom):
         # In Vanilla 0x7F01A3 & 0x10 is set for 600AD ruins
         #            0x7F01A3 & 0x08 is set for 1000AD ruins
 
-        # In Jets 0x7F01A3 & 0x20 is set for 600AD ruins
-        #         0x7F01A3 & 0x10 is set for 1000AD ruins
+        # In Jets 0x7F01A3 & 0x20 is set for 1000AD ruins
+        #         0x7F01A3 & 0x10 is set for 600AD ruins
 
         # In 0x44 Northern Ruins Antechamber, Object 0x10
         #   Past obtained - 0x7F01A6 & 0x01
@@ -497,12 +635,12 @@ class Randomizer:
                     TID.TRADING_POST_ARMOR,
                     TID.TRADING_POST_HELM)
 
-        tp_name_dict = dict()
+        tp_name_dict = {}
 
-        item_db = config.itemdb
+        item_db = config.item_db
         CTName = ctstrings.CTNameString
         for treasure_id in tp_spots:
-            item_id = config.treasure_assign_dict[treasure_id].held_item
+            item_id = config.treasure_assign_dict[treasure_id].reward
             name_b = CTName(item_db[item_id].name[1:])
             name = str(name_b)
             tp_name_dict[treasure_id] = name
@@ -560,9 +698,9 @@ class Randomizer:
         fight_thresh_up = [0xA0, 0x60, 0x80]
         fight_thresh_down = [0x80, 0x60, 0xA0]
         fights_up = [ind for ind, thresh in enumerate(fight_thresh_up)
-                     if rand.randrange(0, 0x100) < thresh]
+                     if random.randrange(0, 0x100) < thresh]
         fights_down = [ind for ind, thresh in enumerate(fight_thresh_down)
-                       if rand.randrange(0, 0x100) < thresh]
+                       if random.randrange(0, 0x100) < thresh]
 
         self.config.omen_elevator_fights_up = fights_up
         self.config.omen_elevator_fights_down = fights_down
@@ -608,16 +746,15 @@ class Randomizer:
     def __set_omen_elevators_ctrom(self, ctrom: CTRom,
                                    config: cfg.RandoConfig):
         '''Set both omen elevators'''
-        fights = [config.omen_elevator_fights_down,
-                  config.omen_elevator_fights_up]
-        loc_ids = [ctenums.LocID.BLACK_OMEN_ELEVATOR_DOWN,
-                   ctenums.LocID.BLACK_OMEN_ELEVATOR_UP]
+        self.__set_omen_elevator_ctrom(
+            ctrom, config.omen_elevator_fights_down,
+            ctenums.LocID.BLACK_OMEN_ELEVATOR_DOWN
+        )
 
-        for x in list(zip(loc_ids, fights)):
-            elev_fights = x[1]
-            elev_loc_id = x[0]
-
-            self.__set_omen_elevator_ctrom(ctrom, elev_fights, elev_loc_id)
+        self.__set_omen_elevator_ctrom(
+            ctrom, config.omen_elevator_fights_up,
+            ctenums.LocID.BLACK_OMEN_ELEVATOR_UP
+        )
 
     def __lavos_ngplus(self):
         '''Removes a check for dead Mammon Machine on Lavos NG+'''
@@ -631,7 +768,98 @@ class Randomizer:
         if cmd.args[0:3] == [0xA8, 0x80, 0x86]:
             script.delete_commands(pos, 1)
         else:
-            print('failed to find mm flag')
+            raise ctevent.CommandNotFoundException('failed to find mm flag')
+
+    def __free_guardia_forest_600_objs(self):
+        """
+        Remove Cyrus/Glenn cutscene objects to make room for objective objects.
+        """
+        loc_id = ctenums.LocID.GUARDIA_FOREST_600
+        script = self.out_rom.script_manager.get_script(loc_id)
+
+        for obj_id in range(0xD, 7, -1):
+            script.remove_object(obj_id)
+
+    def __try_bromide_fix(self):
+        """
+        Fix the bromide not being obtainable (despite message) after the boss
+        is defeated.
+        """
+        loc_id = ctenums.LocID.MANORIA_STORAGE
+        script = self.out_rom.script_manager.get_script(loc_id)
+        EC = eventcommand.EventCommand
+        OP = eventcommand.Operation
+
+        pos = script.find_exact_command(
+            EC.if_mem_op_value(0x7F0100, OP.BITWISE_AND_NONZERO, 0x02, 1, 0),
+            script.get_function_start(8, 1)
+        )
+
+        pos += 5  # Get to next command, a goto.
+
+        jump_byte_pos = pos + 1
+        flag_set_pos = script.find_exact_command(EC.set_bit(0x7F00FE, 0x02), pos)
+
+        bytes_jumped = flag_set_pos - jump_byte_pos
+        script.data[jump_byte_pos] = bytes_jumped
+
+    def __try_sunstone_pickup_fix(self):
+        """
+        Place the item addition and flag setting prior to the textbox.
+        This is done already if ADD_SUNKEEP_SPOT is active.
+        """
+
+        if rset.GameFlags.ADD_SUNKEEP_SPOT in self.settings.gameflags:
+            return
+
+        loc_id = ctenums.LocID.SUN_KEEP_2300
+        script = self.out_rom.script_manager.get_script(loc_id)
+        EC = eventcommand.EventCommand
+        EF = eventfunction.EventFunction
+
+        pos = script.find_exact_command(EC.set_explore_mode(False),
+                                        script.get_function_start(8, 1))
+        script.delete_commands(pos, 1)
+        set_bit_cmd = EC.set_bit(0x7F013A, 0x40)
+
+        pos, _ = script.find_command([0xBB], pos)
+        script.insert_commands(
+            EF().add(set_bit_cmd)
+            .add(EC.add_item(ctenums.ItemID.SUN_STONE)).get_bytearray(), pos
+        )
+
+        pos = script.find_exact_command(set_bit_cmd, pos + len(set_bit_cmd))
+        script.delete_commands(pos, 2)
+
+    def __try_manoria_softlock_fix(self):
+        """
+        Move coordinates of manoria hq fight triggers to avoid double hitting.
+        """
+
+        loc_id = ctenums.LocID.MANORIA_HEADQUARTERS
+        script = self.out_rom.script_manager.get_script(loc_id)
+        EC = eventcommand.EventCommand
+
+        # Trigger objects are in 0x26, 0x27, 0x28.
+        # Coordinates in startup are bogus.  They are set in Arb0.
+
+        # Object 0x26 - 0x144, 0x1AC
+        # Object 0x27 - 0x178, 0x1AC
+        # Object 0x28 - 0x160, 0x198
+
+        # We're going to try to get away with a single trigger (0x27)
+        pos = script.get_function_start(0x26, 3)
+        new_cmd = EC.set_object_coordinates_pixels(0x144, 0x120)
+        script.data[pos: pos + len(new_cmd)] = new_cmd.to_bytearray()
+
+        pos = script.get_function_start(0x28, 3)
+        new_cmd = EC.set_object_coordinates_pixels(0x160, 0x120)
+        script.data[pos: pos + len(new_cmd)] = new_cmd.to_bytearray()
+
+        # Pixel coords are weird.
+        pos = script.get_function_start(0x27, 3)
+        new_cmd = EC.set_object_coordinates_pixels(0x160, 0x1AC)
+        script.data[pos: pos + len(new_cmd)] = new_cmd.to_bytearray()
 
     def __try_supervisors_office_recruit_fix(self):
         '''
@@ -734,12 +962,15 @@ class Randomizer:
         # it needs to reallocate.  To do this, it reads enemy data.  If the
         # new enemy data is written first, it will read the wrong number of
         # attacks and free too much.  So the ai/atks are written first.
-        config.enemy_aidb.write_to_ctrom(ctrom)
-        config.enemy_atkdb.write_to_ctrom(ctrom)
+        config.enemy_ai_db.write_to_ctrom(ctrom)
+        config.enemy_atk_db.write_to_ctrom(ctrom)
 
         # Write enemies out
         for enemy_id, stats in config.enemy_dict.items():
             stats.write_to_ctrom(ctrom, enemy_id)
+
+        for enemy_id, sprite_data in config.enemy_sprite_dict.items():
+            sprite_data.write_to_ctrom(ctrom, enemy_id)
 
         # Write treasures out -- this includes key items
         # for treasure in config.treasure_assign_dict.values():
@@ -751,18 +982,29 @@ class Randomizer:
         config.shop_manager.write_to_ctrom(ctrom)
 
         # Write items out
-        config.itemdb.write_to_ctrom(ctrom)
+        config.item_db.write_to_ctrom(ctrom)
 
         # Write characters out
         # Recruitment spots
         for character in config.char_assign_dict.values():
             character.write_to_ctrom(ctrom)
 
+        charassign.fix_cursed_recruit_spots(
+            config, ctrom,
+            rset.GameFlags.LOCKED_CHARS in self.settings.gameflags
+        )
+
+        # I need to write objectives before bosses are in because otherwise
+        # the change in object count change the correct object_ids to hook into.
+        bucketlist.write_objectives_to_ctrom(self.out_rom, self.settings,
+                                             self.config)
+
         # Stats
-        config.char_manager.write_stats_to_ctrom(ctrom)
+        config.pcstats.write_to_ctrom(ctrom)
 
         # Write out the rest of the character data (incl. techs)
         charrando.reassign_characters_on_ctrom(ctrom, config)
+        elementrando.update_element_placards_on_ctrom(ctrom, config)
 
         # Write out the bosses
         bossrando.write_bosses_to_ctrom(ctrom, config)
@@ -773,6 +1015,7 @@ class Randomizer:
         # Omen elevator
         self.__set_omen_elevators_ctrom(ctrom, config)
 
+        scriptshortener.shorten_all_scripts(ctrom)
         # Disabling xmenu character locks is only relevant in LoC and IA, but
         # there's no reason not to just do it always.
         self.__disable_xmenu_charlocks(ctrom)
@@ -781,19 +1024,39 @@ class Randomizer:
         '''Given config and settings, write to self.out_rom'''
         self.out_rom = CTRom(self.base_ctrom.rom_data.getvalue(), True)
 
-        # TODO:  Consider working some of the always-applied script changes
-        #        Into patch.ips to improve generation speed.
-        self.__apply_basic_patches(self.out_rom, self.settings)
+        initial_vanilla = False
+        if CTRom.validate_ct_rom_bytes(self.out_rom.rom_data.getbuffer()):
+            initial_vanilla = True
+            # It's too hard reclaiming space from basepatch.ips.  Just take
+            # one block that I know is OK.
+            # basepatch.mark_initial_free_space(self.out_rom)
+            self.out_rom.rom_data.space_manager.mark_block(
+                (0x027DE4, 0x028000), ctevent.FSWriteType.MARK_FREE
+            )
 
+        # TODO:  Consider working some of the always-applied script changes
+        #        Into base_patch.ips to improve generation speed.
+        self.__apply_basic_patches(self.out_rom, self.settings)
+        self.__free_guardia_forest_600_objs()
         self.__apply_settings_patches(self.out_rom, self.settings)
+
+
+        if initial_vanilla:
+            # self.out_rom.rom_data.space_manager.mark_block(
+            chesttext.apply_chest_text_hack(
+                self.out_rom, self.config.item_db
+            )
+            self.out_rom.rom_data.space_manager.mark_block(
+                (0x027DE4, 0x028000), ctevent.FSWriteType.MARK_USED
+            )
 
         # This makes copies of heckran cave passagesways, king's trial,
         # and now Zenan Bridge so that all bosses can go there.
         # There's no reason not do just do this regardless of whether
         # boss rando is on.
-        bossrando.duplicate_maps_on_ctrom(self.out_rom)
-        bossrando.duplicate_zenan_bridge(self.out_rom,
-                                         ctenums.LocID.ZENAN_BRIDGE_BOSS)
+        mapmangler.duplicate_maps_on_ctrom(self.out_rom)
+        mapmangler.duplicate_zenan_bridge(self.out_rom,
+                                          ctenums.LocID.ZENAN_BRIDGE_BOSS)
 
         # Script changes which can always be made
         Event = ctevent.Event
@@ -859,41 +1122,42 @@ class Randomizer:
         #   - Duplicate characters changes to Spekkio when not in LW
         flags = self.settings.gameflags
         mode = self.settings.game_mode
-        dup_chars = rset.GameFlags.DUPLICATE_CHARS in flags
+        char_rando = rset.GameFlags.CHAR_RANDO in flags
         locked_chars = rset.GameFlags.LOCKED_CHARS in flags
         lost_worlds = rset.GameMode.LOST_WORLDS == mode
         vanilla = rset.GameMode.VANILLA_RANDO == mode
         epoch_fail = rset.GameFlags.EPOCH_FAIL in flags
 
-        if dup_chars and not lost_worlds:
-            # Lets Spekkio give magic properly to duplicates
-            dc_spekkio_event = Event.from_flux('./flux/charrando-eot.flux')
-            script_manager.set_script(dc_spekkio_event,
+        if char_rando and not lost_worlds:
+            # Lets Spekkio give magic properly with randomized/duplicate chars
+            rc_spekkio_event = Event.from_flux('./flux/charrando-eot.flux')
+            script_manager.set_script(rc_spekkio_event,
                                       ctenums.LocID.SPEKKIO)
 
         if locked_chars:
+            # Note: Proto Dome's lock is taken care of in charassign now.
             lc_dactyl_upper_event = \
                 Event.from_flux('./flux/lc_dactyl_upper.Flux')
             script_manager.set_script(lc_dactyl_upper_event,
                                       ctenums.LocID.DACTYL_NEST_UPPER)
 
-            # Note: This changes the Proto Dome script, but it does not change
-            #       which objects/functions have the char recruit data, so the
-            #       randomization doesn't break.  If a script does change that
-            #       data then self.config.char_assign_dict would change.
-            # TODO: Just do surgery on the script instead of loading flux.
-            lc_proto_dome_event = Event.from_flux('./flux/lc_proto_dome.Flux')
-            script_manager.set_script(lc_proto_dome_event,
-                                      ctenums.LocID.PROTO_DOME)
-
         # Proto fix, Mystic Mtn fix, and Lavos NG+ are candidates for being
-        # rolled into patch.ips.
+        # rolled into base_patch.ips.
+
+        prismshard.update_prismshard_quest(self.out_rom)
+
+        elementrando.update_ctrom(self.out_rom, self.config)
 
         if epoch_fail:
             epochfail.apply_epoch_fail(self.out_rom, self.settings)
 
         if vanilla:
+            # Restore geno conveyor, 6 R-series, easier lavos script.
+            # Logic changes are all handled by flags now.
             vanillarando.restore_scripts(self.out_rom)
+
+        self.__apply_logic_tweaks_to_ctrom(self.settings, self.config,
+                                           self.out_rom)
 
         if rset.GameFlags.UNLOCKED_MAGIC in self.settings.gameflags:
             fastmagic.add_tracker_hook(self.out_rom)
@@ -908,11 +1172,14 @@ class Randomizer:
             # The Telepod script is different in LW.  Just ignore.
             self.__set_fast_magus_castle(self.out_rom)
 
+        self.__set_fast_zeal_teleporters(self.out_rom)
+
         # Use 0x7F01A6 for the cat counter.
         self.__add_cat_pet_flag(self.out_rom, 0x7F01A6, 0x08)
 
-        # Split the NR "sealed" chests
+        # Split the NR "sealed" chests and make the quest a little faster.
         self.__fix_northern_ruins_sealed(self.out_rom)
+        self.__accelerate_carpenter_quest(self.out_rom)
 
         # Update the trading post descriptions
         self.__update_trading_post_string(self.out_rom, self.config)
@@ -920,6 +1187,15 @@ class Randomizer:
         # Two potential softlocks caused by (presumably) touch == activate.
         self.__try_proto_dome_fix()
         self.__try_mystic_mtn_portal_fix()
+
+        # One softlock caused by (presumably) race condition on touch triggers
+        self.__try_manoria_softlock_fix()
+
+        # Bromide not obtainable after Yakra fix
+        self.__try_bromide_fix()
+
+        # Sunstone flag/item is not added until after music change
+        self.__try_sunstone_pickup_fix()
 
         # Potential recruit loss when characters rescue in prison
         self.__try_supervisors_office_recruit_fix()
@@ -930,6 +1206,11 @@ class Randomizer:
         # Everything prior was purely based on settings, not the randomization.
         # Now, write the information from the config to the rom.
         self.__write_config_to_out_rom()
+
+        # Fix to giant's claw box
+        claw_copy = treasuretypes.ChestTreasureData()
+        claw_copy.copy_location = ctenums.LocID.TYRANO_LAIR_ANTECHAMBERS
+        claw_copy.write_to_ctrom(self.out_rom, 0x19)
 
         # Ice Age/LoC script changes need to go after the config is written
         # because the recruit spot works by changing all character recruit
@@ -953,7 +1234,7 @@ class Randomizer:
         self.out_rom.write_all_scripts_to_rom(clear_scripts=True)
 
         # Put the seed hash on the active/wait screen
-        seedhash.write_hash_string(self.out_rom)
+        self.hash_string_bytes = seedhash.write_hash_string(self.out_rom)
 
         # Apply post-randomization changes
         self.__apply_cosmetic_patches(self.out_rom, self.settings)
@@ -974,20 +1255,23 @@ class Randomizer:
         self.out_rom.fix_snes_checksum()
         self.has_generated = True
 
-    def get_generated_rom(self) -> bytearray:
+    def get_generated_rom(self) -> bytes:
         if not self.has_generated:
             self.generate_rom()
 
+        if self.out_rom is None:
+            raise GenerationFailedException("Failed to generate rom.")
         return self.out_rom.rom_data.getvalue()
 
     def write_spoiler_log(self, outfile):
         if isinstance(outfile, str):
-            with open(outfile, 'w') as real_outfile:
+            with open(outfile, 'w', encoding='utf-8') as real_outfile:
                 self.write_spoiler_log(real_outfile)
         else:
             self.write_settings_spoilers(outfile)
             self.write_tab_spoilers(outfile)
             self.write_consumable_spoilers(outfile)
+            self.write_objective_spoilers(outfile)
             self.write_key_item_spoilers(outfile)
             self.write_boss_rando_spoilers(outfile)
             self.write_character_spoilers(outfile)
@@ -999,13 +1283,12 @@ class Randomizer:
 
     def write_json_spoiler_log(self, outfile):
         if isinstance(outfile, str):
-            with open(outfile, 'w') as real_outfile:
+            with open(outfile, 'w', encoding='utf-8') as real_outfile:
                 self.write_json_spoiler_log(real_outfile)
         else:
             json.dump(
-                {"configuration": self.config,
-                 "settings": self.settings},
-                outfile, cls=JOTJSONEncoder
+                {"configuration": self.config, "settings": self.settings},
+                outfile, cls=JOTJSONEncoder, indent=2
             )
 
     def _summarize_dupes(self):
@@ -1022,8 +1305,8 @@ class Randomizer:
                     ", ".join([str(CharID(i))
                                for i in (set(range(7)) - set(choicelist))])
 
-        chars = {c: summarize_single(self.settings.char_choices[c])
-                 for c in range(len(self.settings.char_choices))}
+        chars = {c: summarize_single(self.settings.char_settings.choices[c])
+                 for c in range(len(self.settings.char_settings.choices))}
         rv = ""
         for c in sorted(chars.keys()):
             if chars[c] != "Any":
@@ -1031,6 +1314,22 @@ class Randomizer:
         return rv
 
     def write_settings_spoilers(self, file_object):
+        gf = self.settings.gameflags
+
+        def pretty(flags: rset.GameFlags, indent="", width=80) -> str:
+            # use textwrap.wraps hyphen-splitting mechanism to split on flags
+            text = str(flags).replace("|", "-")
+            lines = [
+                line.replace("-", "|").rstrip("|")
+                for line in textwrap.wrap(
+                    text, width=width, break_long_words=False, subsequent_indent=indent
+                )
+            ]
+            return "\n".join(lines)
+
+        if self.hash_string_bytes is not None:
+            hashstr = str(ctstrings.CTNameString(self.hash_string_bytes)).replace('*', '{star}')
+            file_object.write(f"Seed Hash: {hashstr}\n")
         file_object.write(f"Game Mode: {self.settings.game_mode}\n")
         file_object.write(f"Enemies: {self.settings.enemy_difficulty}\n")
         file_object.write(f"Items: {self.settings.item_difficulty}\n")
@@ -1041,15 +1340,33 @@ class Randomizer:
                 f"Magic {tab_set.magic_min}-{tab_set.magic_max}, "
                 f"Speed {tab_set.speed_min}-{tab_set.speed_max}\n"
             )
-        if rset.GameFlags.DUPLICATE_CHARS in self.settings.gameflags and \
-           self.settings.char_choices != rset.Settings().char_choices:
+        if rset.GameFlags.CHAR_RANDO in gf and \
+           self.settings.char_settings.choices != rset.Settings().char_settings.choices:
 
             dupes = self._summarize_dupes()
             file_object.write(f"Characters: {dupes}\n")
         file_object.write(f"Techs: {self.settings.techorder}\n")
         file_object.write(f"Shops: {self.settings.shopprices}\n")
-        file_object.write(f"Flags: {self.settings.gameflags}\n")
-        file_object.write(f"Cosmetic: {self.settings.cosmetic_flags}\n\n")
+        pretty_flags = pretty(gf, indent=16*" "+"|")
+        file_object.write(f"Flags: {pretty_flags}\n")
+        # if settings changed from initial values passed by user, print flags diff
+        if self.settings.initial_flags and gf != self.settings.initial_flags:
+            diff = "Diff:"
+            plus_flags, minus_flags = self.settings.get_flag_diffs()
+            if plus_flags:
+                plus = pretty(plus_flags, indent="  + |", width=73)
+                diff += f"\n  + {plus}"
+            if minus_flags:
+                minus = pretty(minus_flags, indent=" - |", width=73)
+                diff += f"\n  - {minus}"
+            file_object.write(textwrap.indent(f"{diff}\n", 7*" "))
+        if rset.GameFlags.BOSS_RANDO in self.settings.gameflags and self.settings.ro_settings.flags:
+            pretty_ro = pretty(self.settings.ro_settings.flags, indent=23*" "+"|")
+            file_object.write(f"RO Flags: {pretty_ro}\n")
+        if self.settings.cosmetic_flags:
+            pretty_cosmetics = pretty(self.settings.cosmetic_flags, indent=23*" "+"|")
+            file_object.write(f"Cosmetic: {pretty_cosmetics}\n")
+        file_object.write("\n")
 
     def write_consumable_spoilers(self, file_object):
         file_object.write("Consumable Properties\n")
@@ -1063,7 +1380,7 @@ class Randomizer:
         )
 
         for item_id in consumables:
-            item = self.config.itemdb[item_id]
+            item = self.config.item_db[item_id]
             name = ctstrings.CTNameString(item.name)
             name_str = str(name).ljust(15, ' ')
             desc = ctstrings.CTString(item.desc[:-1])  # Remove {null}
@@ -1083,13 +1400,13 @@ class Randomizer:
         ]
 
         tab_magnitudes = [
-            self.config.power_tab_amt,
-            self.config.magic_tab_amt,
-            self.config.speed_tab_amt
+            self.config.tab_stats.power_tab_amt,
+            self.config.tab_stats.magic_tab_amt,
+            self.config.tab_stats.speed_tab_amt
         ]
 
-        for i in range(len(tab_names)):
-            file_object.write(f'{tab_names[i]}: +{tab_magnitudes[i]}\n')
+        for name, magnitude in zip(tab_names, tab_magnitudes):
+            file_object.write(f'{name}: +{magnitude}\n')
 
         file_object.write('\n')
 
@@ -1104,7 +1421,7 @@ class Randomizer:
 
         for location in self.config.key_item_locations:
             item_id = location.lookupKeyItem(self.config)
-            item_name = self.config.itemdb[item_id].get_name_as_str(True)
+            item_name = self.config.item_db[item_id].get_name_as_str(True)
             file_object.write(str.ljust(f"{location.getName()}", width+8) +
                               item_name + '\n')
         file_object.write('\n')
@@ -1115,7 +1432,7 @@ class Randomizer:
         file_object.write(spheres + '\n')
 
     def write_character_spoilers(self, file_object):
-        char_man = self.config.char_manager
+        pcstats = self.config.pcstats
         char_assign = self.config.char_assign_dict
 
         file_object.write("Character Locations\n")
@@ -1123,7 +1440,7 @@ class Randomizer:
         for recruit_spot in char_assign.keys():
             held_char = char_assign[recruit_spot].held_char
             reassign_char = \
-                self.config.char_manager.pcs[held_char].assigned_char
+                pcstats.get_character_assignment(held_char)
             file_object.write(str.ljust(f"{recruit_spot}", 20) +
                               f"{char_assign[recruit_spot].held_char}"
                               f" reassigned {reassign_char}\n")
@@ -1133,22 +1450,27 @@ class Randomizer:
         file_object.write("---------------\n")
 
         CharID = ctenums.CharID
-        dup_chars = rset.GameFlags.DUPLICATE_CHARS in self.settings.gameflags
-        techdb = self.config.techdb
+        char_rando = rset.GameFlags.CHAR_RANDO in self.settings.gameflags
+        tech_db = self.config.tech_db
 
         for char_id in range(7):
+            pc_id = CharID(char_id)
             file_object.write(f"{CharID(char_id)}:")
-            if dup_chars:
+            if char_rando:
                 file_object.write(
-                    f" assigned to {char_man.pcs[char_id].assigned_char}"
+                    f" assigned to {pcstats.get_character_assignment(pc_id)}"
                 )
             file_object.write('\n')
-            file_object.write(char_man.pcs[char_id].stats.get_stat_string())
+            file_object.write(
+                pcstats.pc_stat_dict[pc_id].get_spoiler_string(
+                    self.config.item_db
+                )
+            )
 
             file_object.write('Tech Order:\n')
             for tech_num in range(8):
                 tech_id = 1 + 8*char_id + tech_num
-                tech = techdb.get_tech(tech_id)
+                tech = tech_db.get_tech(tech_id)
                 name = ctstrings.CTString.ct_bytes_to_techname(tech['name'])
                 file_object.write(f"\t{name}\n")
             file_object.write('\n')
@@ -1162,8 +1484,11 @@ class Randomizer:
         file_object.write("-------------------\n")
         treasure_dict = self.config.treasure_assign_dict
         for treasure in treasure_dict.keys():
-            item_id = treasure_dict[treasure].held_item
-            name = self.config.itemdb[item_id].get_name_as_str(True)
+            reward = treasure_dict[treasure].reward
+            if isinstance(reward, ctenums.ItemID):
+                name = self.config.item_db[reward].get_name_as_str(True)
+            else:
+                name = f'{reward}G'
 
             file_object.write(str.ljust(str(treasure), width+8) +
                               name + '\n')
@@ -1173,7 +1498,7 @@ class Randomizer:
         file_object.write("Shop Assigmment\n")
         file_object.write("---------------\n")
         file_object.write(
-            self.config.shop_manager.__str__(self.config.itemdb)
+            self.config.shop_manager.get_spoiler_string(self.config.item_db)
         )
         file_object.write('\n')
 
@@ -1187,7 +1512,7 @@ class Randomizer:
                     if x in range(1, ctenums.ItemID(0xD0))]
 
         for item_id in item_ids:
-            item = self.config.itemdb[item_id]
+            item = self.config.item_db[item_id]
             name = str(ctstrings.CTNameString(item.name[1:])).ljust(15, ' ')
             desc = ctstrings.CTString(item.desc[:-1]).to_ascii()
             price = str(item.price).rjust(5, ' ') + 'G'
@@ -1200,16 +1525,13 @@ class Randomizer:
         file_object.write("--------------\n")
 
         boss_dict = self.config.boss_assign_dict
-        boss_data_dict = self.config.boss_data_dict
-        twin_type = boss_data_dict[ctenums.BossID.TWIN_BOSS].scheme.ids[0]
-        twin_name = self.config.enemy_dict[twin_type].name
         width = max(len(str(x)) for x in boss_dict.keys()) + 8
 
         for location in boss_dict.keys():
-            if boss_dict[location] == ctenums.BossID.TWIN_BOSS:
-                boss_name = 'Twin ' + str(twin_name)
-            else:
-                boss_name = str(boss_dict[location])
+            boss_name = str(boss_dict[location])
+
+            if location == rotypes.BossSpotID.OCEAN_PALACE_TWIN_GOLEM:
+                boss_name = 'Twin ' + boss_name
 
             file_object.write(
                 str.ljust(str(location), width) +
@@ -1221,8 +1543,8 @@ class Randomizer:
 
     def write_boss_stat_spoilers(self, file_object):
 
-        scale_dict = self.config.boss_rank
-        BossID = ctenums.BossID
+        scale_dict = self.config.boss_rank_dict
+        BossID = rotypes.BossID
 
         file_object.write("Boss Stats\n")
         file_object.write("----------\n")
@@ -1234,6 +1556,10 @@ class Randomizer:
 
         boss_ids = list(self.config.boss_assign_dict.values()) + \
             [BossID.MAGUS, BossID.BLACK_TYRANO] + endboss_ids
+
+        if rotypes.BossSpotID.OCEAN_PALACE_TWIN_GOLEM in \
+           self.config.boss_assign_dict:
+            boss_ids.append(rotypes.BossID.TWIN_BOSS)
 
         for boss_id in boss_ids:
             file_object.write(str(boss_id)+':')
@@ -1262,40 +1588,39 @@ class Randomizer:
                     file_object.write(
                         f" Element is {tyrano_elem}"
                     )
-            elif boss_id == BossID.MEGA_MUTANT:
-                part = ctenums.EnemyID.MEGA_MUTANT_BOTTOM
-                obstacle_id = bossrando.get_obstacle_id(part, self.config)
-                obstacle = self.config.enemy_atkdb.get_tech(obstacle_id)
-                obstacle_status = obstacle.effect.status_effect
-                status_string = ', '.join(str(x) for x in obstacle_status)
-                file_object.write(f' Obstacle is {status_string}')
-            elif boss_id == BossID.TERRA_MUTANT:
-                part = ctenums.EnemyID.TERRA_MUTANT_HEAD
-                obstacle_id = bossrando.get_obstacle_id(part, self.config)
-                obstacle = self.config.enemy_atkdb.get_tech(obstacle_id)
-                obstacle_status = obstacle.effect.status_effect
-                status_string = ', '.join(str(x) for x in obstacle_status)
-                file_object.write(f' Obstacle is {status_string}')
+            # elif boss_id == BossID.MEGA_MUTANT:
+            #     part = ctenums.EnemyID.MEGA_MUTANT_BOTTOM
+            #     obstacle_id = bossrando.get_obstacle_id(part, self.config)
+            #     obstacle = self.config.enemy_atk_db.get_tech(obstacle_id)
+            #     obstacle_status = obstacle.effect.status_effect
+            #     status_string = ', '.join(str(x) for x in obstacle_status)
+            #     file_object.write(f' Obstacle is {status_string}')
+            # elif boss_id == BossID.TERRA_MUTANT:
+            #     part = ctenums.EnemyID.TERRA_MUTANT_HEAD
+            #     obstacle_id = bossrando.get_obstacle_id(part, self.config)
+            #     obstacle = self.config.enemy_atk_db.get_tech(obstacle_id)
+            #     obstacle_status = obstacle.effect.status_effect
+            #     status_string = ', '.join(str(x) for x in obstacle_status)
+            #     file_object.write(f' Obstacle is {status_string}')
 
             file_object.write('\n')
 
-            boss = self.config.boss_data_dict[boss_id]
-            part_ids = list(dict.fromkeys(boss.scheme.ids))
+            boss_scheme = self.config.boss_data_dict[boss_id]
+            part_ids = [part.enemy_id for part in boss_scheme.parts]
             for part_id in part_ids:
                 if len(part_ids) > 1:
                     file_object.write(f"Part: {part_id}\n")
-                part_str = self.config.enemy_dict[part_id].__str__(
-                    self.config.itemdb
-                )
+                part = self.config.enemy_dict[part_id]
+                part_str = part.get_spoiler_string(self.config.item_db)
                 # put the string one tab out
                 part_str = '\t' + str.replace(part_str, '\n', '\n\t')
                 file_object.write(part_str+'\n')
             file_object.write('\n')
 
-        obstacle = self.config.enemy_atkdb.get_tech(0x58)
+        obstacle = self.config.enemy_atk_db.get_tech(0x58)
         obstacle_status = obstacle.effect.status_effect
         status_string = ', '.join(str(x) for x in obstacle_status)
-        file_object.write(f"Endgame obstacle is {status_string}\n\n")
+        file_object.write("Obstacle is {status_string}\n\n")
 
     def write_drop_charm_spoilers(self, file_object):
         file_object.write("Enemy Drop and Charm\n")
@@ -1324,7 +1649,7 @@ class Randomizer:
         ids = [x for tier in tiers for x in tier]
         width = max(len(str(x)) for x in ids) + 8
 
-        item_db = self.config.itemdb
+        item_db = self.config.item_db
 
         for ind, tier in enumerate(tiers):
             file_object.write(labels[ind] + '\n')
@@ -1346,12 +1671,111 @@ class Randomizer:
 
         file_object.write('\n')
 
+    def write_objective_spoilers(self, file_object: typing.TextIO):
+        if rset.GameFlags.BUCKET_LIST not in self.settings.gameflags:
+            return
+
+        file_object.write("Objectives\n")
+        file_object.write("----------\n")
+
+        bset = self.settings.bucket_settings
+
+        reward_str = "unlock the bucket"
+        if bset.objectives_win:
+            reward_str = "win the game"
+            file_object.write(f"Complete {bset.num_objectives_needed} to "
+                          f"{reward_str}.\n")
+
+        if bset.disable_other_go_modes:
+            file_object.write("Other go modes are DISABLED.\n\n")
+
+        num_objectives = self.settings.bucket_settings.num_objectives
+        for ind, objective in enumerate(self.config.objectives):
+            if ind >= num_objectives:
+                break
+
+            file_object.write(f'Objective {ind+1}: {objective.desc}\n')
+
+        file_object.write('\n')
+
+    @classmethod
+    def __apply_logic_tweaks_to_config(cls, settings: rset.Settings,
+                                       config: cfg.RandoConfig):
+        '''
+        Applies logic tweaks to the config.  Assumes that the settings are
+        valid (no conflicts w/ game mode)
+        '''
+        flags = settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.ADD_SUNKEEP_SPOT in flags:
+            vanillarando.add_sunstone_spot_to_config(config)
+
+        if GF.ADD_BEKKLER_SPOT in flags:
+            vanillarando.add_vanilla_clone_check_to_config(config)
+
+        if GF.ADD_CYRUS_SPOT in flags:
+            vanillarando.restore_cyrus_grave_check_to_config(config)
+
+        if GF.ADD_OZZIE_SPOT in flags:
+            vanillarando.add_check_to_ozzies_fort_in_config(config)
+
+        if GF.SPLIT_ARRIS_DOME in flags:
+            vanillarando.add_arris_food_locker_check_to_config(config)
+
+        if GF.ADD_RACELOG_SPOT in flags:
+            vanillarando.add_racelog_chest_to_config(config)
+
+    @classmethod
+    def __apply_logic_tweaks_to_ctrom(cls, settings: rset.Settings,
+                                      config: cfg.RandoConfig,
+                                      ct_rom: CTRom):
+        '''
+        Applies logic tweaks to the scripts.  Assumes that the settings are
+        valid (no conflicts w/ game mode)
+        '''
+
+        flags = settings.gameflags
+        GF = rset.GameFlags
+
+        if GF.UNLOCKED_SKYGATES in flags:
+            vanillarando.unlock_skyways(ct_rom)
+
+        if GF.ADD_SUNKEEP_SPOT in flags:
+            vanillarando.split_sunstone_quest(ct_rom)
+
+        if GF.ADD_BEKKLER_SPOT in flags:
+            vanillarando.add_vanilla_clone_check_scripts(ct_rom)
+
+        if GF.RESTORE_TOOLS in flags:
+            vanillarando.restore_tools_to_carpenter_script(ct_rom)
+
+        if GF.ADD_CYRUS_SPOT in flags:
+            vanillarando.restore_cyrus_grave_script(ct_rom)
+
+        if GF.ADD_OZZIE_SPOT in flags:
+            vanillarando.add_check_to_ozzies_fort_script(ct_rom)
+
+        if GF.RESTORE_JOHNNY_RACE in flags:
+            vanillarando.restore_johnny_race(ct_rom)
+
+        if GF.SPLIT_ARRIS_DOME in flags:
+            vanillarando.split_arris_dome(ct_rom)
+
+        if GF.VANILLA_DESERT in flags:
+            vanillarando.revert_sunken_desert_lock(ct_rom)
+
+        if GF.VANILLA_ROBO_RIBBON in flags:
+            vanillarando.restore_ribbon_boost_atropos(
+                ct_rom, config.boss_assign_dict
+        )
+
     # Because switching logic is a feature now, we need a settings object.
     # Ugly.  BETA_LOGIC flag is gone now, but keeping it as-is in case of
     # logic changes to test.
     @classmethod
     def __apply_basic_patches(cls, ctrom: CTRom,
-                              settings: rset.Settings = None):
+                              settings: Optional[rset.Settings] = None):
         '''Apply patches that are always applied to a jets rom.'''
         rom_data = ctrom.rom_data
 
@@ -1363,12 +1787,12 @@ class Randomizer:
             settings = rset.Settings.get_race_presets()
 
         # Apply the patches that always are applied for jets
-        # patch.ips makes sure that we have
+        # base_patch.ips makes sure that we have
         #   - Stats/stat growths for characters for CharManager
         #   - Tech data for TechDB
         #   - Item data (including prices) for shops
         # patch_codebase.txt may not be needed
-        rom_data.patch_ips_file('./patch.ips')
+        rom_data.patch_ips_file('./patches/base_patch.ips')
 
         # 99.9% sure this patch is redundant now
         rom_data.patch_txt_file('./patches/patch_codebase.txt')
@@ -1383,11 +1807,15 @@ class Randomizer:
         # Add qwertymodo's MSU-1 patch
         # rom_data.patch_ips_file('./patches/chrono_msu1.ips')
 
+        basepatch.apply_tf_compressed_enemy_gfx_hack(ctrom)
+
     @classmethod
     def __apply_settings_patches(cls, ctrom: CTRom,
                                  settings: rset.Settings):
-        '''Apply patches to a vanilla ctrom based on randomizer settings.  '''
-        '''These are patches not handled by writing the config.'''
+        '''
+        Apply patches to a vanilla ctrom based on randomizer settings.
+        These are patches not handled by writing the config.
+        '''
 
         rom_data = ctrom.rom_data
         flags = settings.gameflags
@@ -1401,7 +1829,8 @@ class Randomizer:
 
         # TODO:  I'd like to do this with .Flux event changes
         if rset.GameFlags.ZEAL_END in flags:
-            rom_data.patch_txt_file('./patches/zeal_end_boss.txt')
+            # rom_data.patch_txt_file('./patches/zeal_end_boss.txt')
+            cls.__apply_zeal_end(ctrom)
 
         # Patching with lost.ips does not give a valid event for
         # mystic mountains.  I could fix the event by applying a flux file,
@@ -1417,7 +1846,7 @@ class Randomizer:
                         rset.GameMode.LEGACY_OF_CYRUS):
                 # Game modes where there is no pendant trial need to enforce
                 # fast pendant by changing scripts.
-                fastpendant.apply_fast_pendant_script(ctrom, settings)
+                fastpendant.apply_fast_pendant_script(ctrom)
             else:
                 rom_data.patch_txt_file('./patches/fast_charge_pendant.txt')
 
@@ -1428,26 +1857,65 @@ class Randomizer:
         if settings.item_difficulty == rset.Difficulty.HARD:
             cls.__set_initial_gold(ctrom, 10000)
 
-        if rset.GameFlags.VISIBLE_HEALTH in flags:
-            qolhacks.force_sightscope_on(ctrom, settings)
-
-        qolhacks.set_guaranteed_drops(ctrom)
-
-        if rset.GameFlags.FREE_MENU_GLITCH in flags:
-            qolhacks.set_free_menu_glitch(ctrom, settings)
+        qolhacks.attempt_all_qol_hacks(ctrom, settings)
 
         if rset.GameFlags.UNLOCKED_MAGIC in flags:
             fastmagic.write_ctrom(ctrom, settings)
 
-        if rset.GameFlags.FAST_TABS in flags:
-            qolhacks.fast_tab_pickup(ctrom, settings)
+    @classmethod
+    def __apply_zeal_end(cls, ct_rom: CTRom):
+        '''
+        Makes the Zeal fight end the game.  We need to add a check to make
+        sure that it's not the Zeal fight from the bucket boss gauntlet.
+        '''
 
-        if rset.GameFlags.BUCKET_FRAGMENTS in flags and \
-           settings.game_mode != rset.GameMode.LOST_WORLDS:
-            # Apparently, LW really changes up the EoT event, so the bucket
-            # function can't work.  It's ok because bucket should be disabled
-            # in LW.
-            bucketfragment.set_bucket_function(ctrom, settings)
+        script = ct_rom.script_manager.get_script(
+            ctenums.LocID.BLACK_OMEN_CELESTIAL_GATE
+        )
+
+        obj_id, func_id = 9, 1
+        # Finding Zeal's textbox before sending to Lavos
+        pos, cmd = script.find_command(
+            [0xBB],
+            script.get_function_start(obj_id, func_id),
+            script.get_function_end(obj_id, func_id)
+        )
+
+        EC = ctevent.EC
+        EF = ctevent.EF
+        OP = eventcommand.Operation
+
+        # I'm just copying the change location command originally used.
+        # I don't know what all of the variants do.
+        change_loc_command = EC.change_location(0x52, 0, 0, 0, 1)
+        change_loc_command.command = 0xDF
+
+        end_func = (
+            EF()
+            .add(EC.set_storyline_counter(0x75))
+            .add(EC.darken(0x0C))
+            .add(EC.fade_screen())
+            .add_if(
+                EC.if_mem_op_value(0x7F01A8, OP.BITWISE_AND_NONZERO, 0x80,
+                                   1, 0),
+                EF().add(EC.generic_command(0xFF, 0x9F))  # NG+ Mode7
+            )
+            .add(change_loc_command)
+            .add(EC.return_cmd())
+        )
+
+        # The current way to encode that we're in the boss gauntlet is to
+        # write 0x0001 to the apocalypse spot in 0x7E288B
+        func = (
+            EF()
+            .add(EC.assign_mem_to_mem(0x7E288B, 0x7F0300, 2))
+            .add_if(
+                EC.if_mem_op_value(0x7F0300, OP.NOT_EQUALS, 1, 2, 0),
+                end_func
+            )
+        )
+
+        script.insert_commands(func.get_bytearray(), pos)
 
     @classmethod
     def __apply_cosmetic_patches(cls, ctrom: CTRom,
@@ -1464,26 +1932,38 @@ class Randomizer:
             cosmetichacks.death_peak_singing_mountain_music(ctrom, settings)
 
         cosmetichacks.set_pc_names(
-            ctrom, *settings.char_names
+            ctrom, *settings.char_settings.names
         )
 
         if rset.CosmeticFlags.REDUCE_FLASH in cos_flags:
             flashreduce.apply_all_flash_hacks(ctrom)
+
+        if rset.CosmeticFlags.AUTORUN in cos_flags:
+            cosmetichacks.set_auto_run(ctrom)
 
         settings.ctoptions.write_to_ctrom(ctrom)
 
     @classmethod
     def dump_default_config(cls, ct_vanilla: bytearray):
         '''Turn vanilla ct rom into default objects for a config.
-        Should run whenever a big patch (patch.ips, hard.ips) changes.'''
-        ctrom = CTRom(ct_vanilla, ignore_checksum=False)
-        cls.__apply_basic_patches(ctrom)
+        Should run whenever a big patch (base_patch.ips, hard.ips) changes.'''
+        ct_rom = CTRom(ct_vanilla, ignore_checksum=False)
+        cls.__apply_basic_patches(ct_rom)
 
         RC = cfg.RandoConfig
-        config = RC.get_config_from_rom(ctrom.rom_data.getbuffer())
+        config = RC()
+        cls.fill_default_config_entries(config)
+        config.update_from_ct_rom(ct_rom)
 
-        with open('./pickles/default_randoconfig.pickle', 'wb') as outfile:
+        with Randomizer._get_pickle_path('default_randoconfig.pickle').open('wb') as outfile:
             pickle.dump(config, outfile)
+
+    @classmethod
+    def fill_default_config_entries(cls, config: cfg.RandoConfig):
+        config.boss_assign_dict = rotypes.get_default_boss_assignment()
+        config.treasure_assign_dict = treasuretypes.get_base_treasure_dict()
+        config.char_assign_dict = pcrecruit.get_base_recruit_dict()
+        config.boss_rank_dict = {}
 
     @classmethod
     def get_base_config_from_settings(cls,
@@ -1496,13 +1976,14 @@ class Randomizer:
           - shop_manager: This shouldn't be strictly needed, but at present
                           ShopManager objects read the initial shop data from
                           the rom.
-          - price_manager: patch.ips changes the default prices.  Potentially
-                           the difficulty patch could too.
-          - char_manager: patch.ips changes character stat growths and base
-                          stats.
-          - techdb: patch.ips changes the basic techs (i.e. Antilife)
-          - enemy_atkdb: Various enemy techs are changed by patch.ips.
-          - enemy_aidb: Various enemy attack scripts are changed by patch.ips.
+          - price_manager: base_patch.ips changes the default prices.
+                           Potentially the difficulty patch could too.
+          - char_manager: base_patch.ips changes character stat growths and
+                          base stats.
+          - tech_db: base_patch.ips changes the basic techs (i.e. Antilife)
+          - enemy_atk_db: Various enemy techs are changed by base_patch.ips.
+          - enemy_ai_db: Various enemy attack scripts are changed by
+                         base_patch.ips.
         '''
 
         # It's a little wasteful copying the rom data to partially patch it
@@ -1511,31 +1992,59 @@ class Randomizer:
         # I do have a pickle with a default config and normal/hard enemy dicts
         # which can be used instead if this is an issue.  The problem with
         # using those is the need to update them with every patch.
-        ctrom = CTRom(ct_vanilla, True)
-        Randomizer.__apply_basic_patches(ctrom)
+        van_ct_rom = CTRom(ct_vanilla, True)
+        ct_rom = CTRom(ct_vanilla, True)
+        Randomizer.__apply_basic_patches(ct_rom)
+        config = cfg.RandoConfig()
+        cls.fill_default_config_entries(config)
+
+        spots = bossrando.get_assignable_spots(settings.game_mode,
+                                               settings.gameflags)
+        config.boss_assign_dict = {
+            spot: config.boss_assign_dict[spot]
+            for spot in spots
+        }
+
+        config.boss_data_dict = rotypes.get_boss_data_dict()
 
         if settings.game_mode == rset.GameMode.VANILLA_RANDO:
-            config = cfg.RandoConfig.get_config_from_rom(
-                ct_vanilla, settings)
+            config.update_from_ct_rom(van_ct_rom)
             vanillarando.fix_config(config)
 
+            # Apply the experimental logic tweaks in the config
+            # This is new, it used to be automatic in vanilla mode.
+            cls.__apply_logic_tweaks_to_config(settings, config)
+
         else:
-            config = cfg.RandoConfig.get_config_from_rom(
-                bytearray(ctrom.rom_data.getvalue())
-            )
+            van_config = cfg.RandoConfig()
+            van_config.update_from_ct_rom(van_ct_rom)
+            config.update_from_ct_rom(ct_rom)
+
+            # base_patch.ips apparently writes marle into the magus spot with
+            # custom ai to heal and cast ice2.  It's cool, but we want the
+            # vanilla north cape magus.
+            magus_id = ctenums.EnemyID.MAGUS_NORTH_CAPE
+            magus_nc_sprite = van_config.enemy_sprite_dict[magus_id]
+            magus_nc_ai = van_config.enemy_ai_db.scripts[magus_id]
+            magus_nc_stats = van_config.enemy_dict[magus_id]
+
+            config.enemy_ai_db.scripts[magus_id] = magus_nc_ai
+            config.enemy_sprite_dict[magus_id] = magus_nc_sprite
+            config.enemy_dict[magus_id] = magus_nc_stats
+
+            # Apply the experimental logic tweaks in the config
+            cls.__apply_logic_tweaks_to_config(settings, config)
 
             # Get hard versions of config items if needed.
-            # We're done with the rom at this point, so it's OK to patch
-            # regardless.
-            ctrom.rom_data.patch_ips_file('./patches/hard.ips')
+            # We're done with the rom at this point, so it's OK to patch.
+            ct_rom.rom_data.patch_ips_file('./patches/hard.ips')
             if settings.enemy_difficulty == rset.Difficulty.HARD:
-                config.enemy_dict = cfg.enemystats.get_stat_dict(
-                    ctrom.rom_data.getvalue()
-                )
+                config.enemy_dict = \
+                    enemystats.get_stat_dict_from_ctrom(ct_rom)
 
             if settings.item_difficulty == rset.Difficulty.HARD:
-                config.itemdb = cfg.itemdata.ItemDB.from_rom(
-                    ctrom.rom_data.getvalue()
+                config.item_db = itemdata.ItemDB.from_rom(
+                    ct_rom.rom_data.getvalue()
                 )
 
             # Why is Dalton worth so few TP?
@@ -1556,22 +2065,23 @@ class Randomizer:
             rt_stats.magic = int(rt_stats.magic * 0.6)
             rt_stats.level = int(rt_stats.level * 0.6)
 
-            techdb = config.techdb
-
-            # Community needs to decide on a name.
-            # inferno = techdb.get_tech(ctenums.TechID.BLAZE_TWISTER)
-            # inferno['name'] = ctstrings.CTNameString.from_string(
-            #     'Inferno'
-            # )
-
             # Fix Falcon Hit to use Spincut as a prerequisite
-            falcon_hit = techdb.get_tech(ctenums.TechID.FALCON_HIT)
+            tech_db = config.tech_db
+            falcon_hit = tech_db.get_tech(ctenums.TechID.FALCON_HIT)
             falcon_hit['lrn_req'][0] = int(ctenums.TechID.SPINCUT)
-            techdb.set_tech(falcon_hit, ctenums.TechID.FALCON_HIT)
+            tech_db.set_tech(falcon_hit, ctenums.TechID.FALCON_HIT)
+
+            # Fix volt bite damage error.
+            tech = tech_db.get_tech(ctenums.TechID.VOLT_BITE)
+            # orig: 0x40 - Ignore hit/evd (set for all combo techs)
+            # Add 0x20: Something similar for magic attacks?  Set for all similar techs
+            # Add 0x01: Control which effects get damage displayed (not precisely known)
+            tech['control'][1] = 0x61
+            tech_db.set_tech(tech, ctenums.TechID.VOLT_BITE)
 
             # Change Cure to ReRaise, Speed to 9 for Marle
-            cure = techdb.get_tech(ctenums.TechID.CURE)
-            reraise = techdb.get_tech(ctenums.TechID.LIFE_2_M)
+            cure = tech_db.get_tech(ctenums.TechID.CURE)
+            reraise = tech_db.get_tech(ctenums.TechID.LIFE_2_M)
             reraise['gfx'][0] = 0x87
             reraise['gfx'][6] = 0xFF
             reraise['control'][5] = 0x3E
@@ -1584,23 +2094,29 @@ class Randomizer:
             )
             reraise['desc'] = new_desc
             reraise['target'] = bytearray(cure['target'])
-            techdb.mps[ctenums.TechID.CURE] = 15
-            techdb.set_tech(reraise, ctenums.TechID.CURE)
-            techdb.menu_usable_ids[ctenums.TechID.CURE] = False
+            tech_db.mps[ctenums.TechID.CURE] = 15
+            tech_db.set_tech(reraise, ctenums.TechID.CURE)
+            tech_db.menu_usable_ids[ctenums.TechID.CURE] = False
 
-            marle = config.char_manager.pcs[ctenums.CharID.MARLE]
-            marle.stats.cur_stats[2] = 9  # Speed to 9
+            pcstats = config.pcstats
+            pcstats.set_current_stat(ctenums.CharID.MARLE,
+                                     ctpcstats.PCStat.SPEED,
+                                     9)
+
+            pcstats.pc_stat_dict[ctenums.CharID.FROG]\
+                   .tp_threshholds.set_threshold(3, 100)
 
             # Reduce Robo tackle to 24 power (follow +15% rule)
             tackle_id = int(ctenums.TechID.ROBO_TACKLE)
-            power_byte = tackle_id*techdb.effect_size + 9
-            techdb.effects[power_byte] = 24
+            power_byte = tackle_id*tech_db.effect_size + 9
+            tech_db.effects[power_byte] = 24
 
-            # Now, the flag keeps tackle effects on (do nothing vs patch.ips)
+            # Now, the flag keeps tackle effects on
+            # (do nothing vs base_patch.ips)
             # If the flag is not present, reset the on-hit byte.
             if rset.GameFlags.TACKLE_EFFECTS_ON not in settings.gameflags:
-                on_hit_byte = tackle_id*techdb.effect_size + 8
-                techdb.effects[on_hit_byte] = 0
+                on_hit_byte = tackle_id*tech_db.effect_size + 8
+                tech_db.effects[on_hit_byte] = 0
 
             # Revert antilife to black hole
             if rset.GameFlags.USE_ANTILIFE not in settings.gameflags:
@@ -1608,7 +2124,7 @@ class Randomizer:
                 vanilla_db = TechDB.get_default_db(ct_vanilla)
                 black_hole = vanilla_db.get_tech(ctenums.TechID.ANTI_LIFE)
 
-                anti_life = techdb.get_tech(ctenums.TechID.ANTI_LIFE)
+                anti_life = tech_db.get_tech(ctenums.TechID.ANTI_LIFE)
                 anti_life['control'][8] = 0x16  # +Atk for down allies
                 anti_life['effects'][0][9] = 0x20  # Megabomb power
                 al_eff_id = anti_life['control'][5]
@@ -1618,18 +2134,18 @@ class Randomizer:
                 # TODO: get_tech needs to be fixed to supply mp values so that
                 #   set_tech can work as it ought.  Really fix the whole
                 #   techdb.
-                byteops.set_record(techdb.effects, anti_life['effects'][0],
+                byteops.set_record(tech_db.effects, anti_life['effects'][0],
                                    al_eff_id,
-                                   techdb.effect_size)
+                                   tech_db.effect_size)
 
                 black_hole['control'] = anti_life['control']
-                techdb.set_tech(black_hole, ctenums.TechID.ANTI_LIFE)
+                tech_db.set_tech(black_hole, ctenums.TechID.ANTI_LIFE)
 
-                techdb.pc_target[int(ctenums.TechID.ANTI_LIFE)] = 6
+                tech_db.pc_target[int(ctenums.TechID.ANTI_LIFE)] = 6
 
             # Make X-Strike use Spincut+Leapslash
             # Also buff 3d-attack and triple raid
-            x_strike = techdb.get_tech(ctenums.TechID.X_STRIKE)
+            x_strike = tech_db.get_tech(ctenums.TechID.X_STRIKE)
             x_strike['control'][5] = int(ctenums.TechID.SPINCUT)
             x_strike['control'][6] = int(ctenums.TechID.LEAP_SLASH)
 
@@ -1639,10 +2155,10 @@ class Randomizer:
 
             x_strike['mmp'][0] = int(ctenums.TechID.SPINCUT)
             x_strike['mmp'][1] = int(ctenums.TechID.LEAP_SLASH)
-            techdb.set_tech(x_strike, ctenums.TechID.X_STRIKE)
+            tech_db.set_tech(x_strike, ctenums.TechID.X_STRIKE)
 
             # 3d-atk
-            three_d_atk = techdb.get_tech(ctenums.TechID.THREE_D_ATTACK)
+            three_d_atk = tech_db.get_tech(ctenums.TechID.THREE_D_ATTACK)
             three_d_atk['control'][6] = int(ctenums.TechID.SPINCUT)
             three_d_atk['control'][7] = int(ctenums.TechID.LEAP_SLASH)
 
@@ -1650,10 +2166,10 @@ class Randomizer:
             three_d_atk['mmp'][1] = int(ctenums.TechID.LEAP_SLASH)
 
             three_d_atk['lrn_req'] = [4, 5, 8]
-            techdb.set_tech(three_d_atk, ctenums.TechID.THREE_D_ATTACK)
+            tech_db.set_tech(three_d_atk, ctenums.TechID.THREE_D_ATTACK)
 
             # Triple Raid
-            triple_raid = techdb.get_tech(ctenums.TechID.TRIPLE_RAID)
+            triple_raid = tech_db.get_tech(ctenums.TechID.TRIPLE_RAID)
             triple_raid['control'][5] = int(ctenums.TechID.SPINCUT)
             triple_raid['control'][7] = int(ctenums.TechID.LEAP_SLASH)
 
@@ -1661,23 +2177,23 @@ class Randomizer:
             triple_raid['mmp'][2] = int(ctenums.TechID.LEAP_SLASH)
 
             triple_raid['lrn_req'] = [4, 4, 5]
-            techdb.set_tech(triple_raid, ctenums.TechID.TRIPLE_RAID)
+            tech_db.set_tech(triple_raid, ctenums.TechID.TRIPLE_RAID)
 
             # Ayla changes
             combo_tripkick_effect_id = 0x3D
             rock_tech_effect_id = int(ctenums.TechID.ROCK_THROW)
 
-            effects = techdb.effects
+            effects = tech_db.effects
             power_byte = 9
             # Triple Kick combo power set to 0x2B=43 to match single
             # tech power
-            trip_pwr = combo_tripkick_effect_id*techdb.effect_size + \
+            trip_pwr = combo_tripkick_effect_id*tech_db.effect_size + \
                 power_byte
             effects[trip_pwr] = 0x2B
 
             # Rock throw getting the 15% boost that tripkick got
             # From 0x1E=30 to 0x23=35
-            rock_pwr = rock_tech_effect_id*techdb.effect_size + power_byte
+            rock_pwr = rock_tech_effect_id*tech_db.effect_size + power_byte
             effects[rock_pwr] = 0x23
 
         # The following changes can happen regardless of mode.
@@ -1686,7 +2202,7 @@ class Randomizer:
 
         # Add grandleon lowering magus's mdef
         # Editing AI is ugly right now, so just use raw binary
-        magus_ai = config.enemy_aidb.scripts[ctenums.EnemyID.MAGUS]
+        magus_ai = config.enemy_ai_db.scripts[ctenums.EnemyID.MAGUS]
         magus_ai_b = magus_ai.get_as_bytearray()
         masa_hit = bytearray.fromhex(
             '18 3D 04 29 FE'
@@ -1698,13 +2214,13 @@ class Randomizer:
         magus_ai_b[masa_hit_loc:masa_hit_loc] = masa_hit
         new_magus_ai = cfg.enemyai.AIScript(magus_ai_b)
 
-        config.enemy_aidb.scripts[ctenums.EnemyID.MAGUS] = new_magus_ai
+        config.enemy_ai_db.scripts[ctenums.EnemyID.MAGUS] = new_magus_ai
 
         # Allow combo tech confuse to use on-hit effects
-        techdb = config.techdb
+        tech_db = config.tech_db
         combo_confuse_id = 0x3C
-        on_hit_byte = combo_confuse_id*techdb.effect_size + 8
-        techdb.effects[on_hit_byte] = 0x80
+        on_hit_byte = combo_confuse_id*tech_db.effect_size + 8
+        tech_db.effects[on_hit_byte] = 0x80
 
         if rset.GameFlags.BOSS_SIGHTSCOPE in settings.gameflags:
             qolhacks.enable_boss_sightscope(config)
@@ -1714,7 +2230,7 @@ class Randomizer:
     @classmethod
     def get_randmomized_rom(cls,
                             rom: bytearray,
-                            settings: rset.Settings) -> bytearray:
+                            settings: rset.Settings) -> bytes:
         '''
         Generate a random rom from the given (maybe not vanilla) rom.
         Uses the seed in settings.seed.
@@ -1727,251 +2243,88 @@ class Randomizer:
         rando.generate_rom()
         return rando.get_generated_rom()
 
+    @staticmethod
+    def _get_pickle_path(filename: Union[str, Path]) -> Path:
+        '''Get path to pickle from "pickles" directory in package.'''
+        return Randomizer._pickles_path / filename
+
+
+class RandomizerWriter:
+    '''Utility class for writing output/spoilers for Randomizer.'''
+    def __init__(self, rando: Randomizer, base_name: Path):
+        self.rando = rando
+
+        flag_string = rando.settings.get_flag_string()
+        seed = rando.settings.seed
+        self.out_string = f"{base_name}.{flag_string}.{seed}"
+
+    def write_output_rom(self, output_path: Path):
+        out_name = f"{self.out_string}.sfc"
+        self.out_rom = self.rando.get_generated_rom()
+        self.full_output_path = output_path / out_name
+        self.full_output_path.write_bytes(self.out_rom)
+
+    def write_spoiler_log(self, output_path: Path):
+        spoiler_name = f"{self.out_string}.spoilers.txt"
+        self.spoiler_path = output_path / spoiler_name
+        self.rando.write_spoiler_log(str(self.spoiler_path))
+
+    def write_json_spoiler_log(self, output_path: Path):
+        json_spoiler_name = f"{self.out_string}.spoilers.json"
+        self.json_spoiler_path = output_path / json_spoiler_name
+        self.rando.write_json_spoiler_log(str(self.json_spoiler_path))
+
 
 def read_names():
-    p = open("names.txt", "r")
-    names = p.readline()
-    names = names.split(",")
-    p.close()
+    names_path = Path(__file__).parent / 'names.txt'
+    with names_path.open('r') as p:
+        names = p.readline().split(',')
     return names
 
 
-#
-# Handle the command line interface for the randomizer.
-#
-def generate_from_command_line():
+def main():
+    parser = arguments.get_parser()
+    args = parser.parse_args()
 
-    sourcefile, outputfolder = get_input_file_from_command_line()
+    if not args.input_file.exists():
+        raise FileNotFoundError("Invalid input file path.")
 
-    # note ext contains the '.'
-    _, ext = os.path.splitext(sourcefile)
+    if args.output_path is None:
+        args.output_path = args.input_file.parent
+    if not args.output_path.is_dir():
+        raise FileNotFoundError("Invalid output directory.")
 
-    with open(sourcefile, 'rb') as infile:
-        rom = infile.read()
+    # Make sure the settings are ok before going further and reading the rom.
+    settings = arguments.args_to_settings(args)
+    if settings.seed is None or settings.seed == "":
+        names = read_names()
+        settings.seed = "".join(random.choice(names) for i in range(2))
 
+    rom = args.input_file.read_bytes()
     if not CTRom.validate_ct_rom_bytes(rom):
         print(
             'Warning: File provided is not a vanilla CT ROM.  Proceed '
             'anyway?  Randomization is likely to fail. (Y/N)'
         )
         proceed = (input().upper() == 'Y')
-
         if not proceed:
-            raise SystemExit()
+            sys.exit()
 
-    settings = get_settings_from_command_line()
-    rando = Randomizer(rom, is_vanilla=False,
-                       settings=settings,
-                       config=None)
-
+    rando = Randomizer(rom, is_vanilla=False, settings=settings, config=None)
     rando.set_random_config()
-    out_rom = rando.get_generated_rom()
 
-    base_name = os.path.basename(sourcefile)
-    flag_string = settings.get_flag_string()
-    out_name = f"{base_name}.{flag_string}.{settings.seed}{ext}"
-    out_path = os.path.join(outputfolder, out_name)
+    base_name = args.input_file.parts[-1]
+    writer = RandomizerWriter(rando, base_name=base_name)
+    writer.write_output_rom(args.output_path)
+    print(f"output ROM: {writer.full_output_path}")
 
-    with open(out_path, 'wb') as outfile:
-        outfile.write(out_rom)
+    if args.spoilers:
+        writer.write_spoiler_log(args.output_path)
+        print(f"spoilers: {writer.spoiler_path}")
 
-    print(f"generated: {out_path}")
-
-
-def get_input_file_from_command_line() -> (str, str):
-    sourcefile = input("Please enter ROM name or drag it onto the screen.")
-
-    # When dragging, bash puts \' around the path.  Remove if present.
-    quotes = ('\'', '\"')
-    print(sourcefile[0], sourcefile[-2])
-    if sourcefile[0] in quotes and sourcefile[-2] in quotes:
-        sourcefile = sourcefile[1:-2]
-
-    _, extension = os.path.splitext(sourcefile)
-
-    if not os.path.isfile(sourcefile):
-        input("Error: File does not exist.")
-        exit()
-
-    print(extension)
-    if extension not in ('.sfc', '.smc'):
-        input(
-            "Invalid File Name. "
-            "Try placing the ROM in the same folder as the randomizer. "
-            "Also, try writing the extension(.sfc/smc)."
-        )
-        exit()
-
-    # In theory ask for alternate output folder, but for now just place in
-    # the same one.
-    outputfolder = os.path.dirname(sourcefile)
-    print(
-        "The output ROM will be placed in the same folder:"
-        f"\n\t{outputfolder}"
-    )
-
-    return sourcefile, outputfolder
-
-
-def get_settings_from_command_line() -> rset.Settings:
-    settings = rset.Settings()
-    settings.gameflags = rset.GameFlags(False)
-
-    seed = input(
-            "Enter seed(or leave blank if you want to randomly generate one)."
-    )
-    if seed is None or seed == "":
-        names = read_names()
-        seed = "".join(rand.choice(names) for i in range(2))
-
-    settings.seed = seed
-
-    # Difficulty (now separated between item/enemy but only in gui)
-    difficulty = input("Choose your difficulty \nEasy(e)/Normal(n)/Hard(h) ")
-    difficulty = difficulty.lower()
-    if difficulty == "n":
-        settings.item_difficulty = rset.Difficulty.NORMAL
-        settings.enemy_difficulty = rset.Difficulty.NORMAL
-    elif difficulty == "e":
-        settings.item_difficulty = rset.Difficulty.EASY
-        settings.enemy_difficulty = rset.Difficulty.NORMAL
-    elif difficulty == 'h':
-        settings.item_difficulty = rset.Difficulty.HARD
-        settings.enemy_difficulty = rset.Difficulty.HARD
-    else:
-        print('Invalid selection.  Defaulting to normal')
-        settings.item_difficulty = rset.Difficulty.NORMAL
-        settings.enemy_difficulty = rset.Difficulty.NORMAL
-
-    glitch_fixes = input(
-        "Would you like to disable (most known) glitches(g)? Y/N "
-    )
-    glitch_fixes = glitch_fixes.upper()
-    if glitch_fixes == "Y":
-        settings.gameflags |= rset.GameFlags.FIX_GLITCH
-
-    lost_worlds = input("Would you want to activate Lost Worlds(l)? Y/N ")
-    lost_worlds = lost_worlds.upper()
-    if lost_worlds == "Y":
-        settings.game_mode = rset.GameMode.LOST_WORLDS
-
-    boss_scaler = input(
-        "Do you want bosses to scale with progression(b)? Y/N "
-    )
-    boss_scaler = boss_scaler.upper()
-    if boss_scaler == "Y":
-        settings.gameflags |= rset.GameFlags.BOSS_SCALE
-
-    boss_rando = input("Do you want randomized bosses(ro)? Y/N ")
-    boss_rando = boss_rando.upper()
-    if boss_rando == "Y":
-        settings.gameflags |= rset.GameFlags.BOSS_RANDO
-
-    zeal_end = input(
-        "Would you like Zeal 2 to be a final boss? "
-        "Note that defeating Lavos still ends the game(z). Y/N "
-    )
-    zeal_end = zeal_end.upper()
-    if zeal_end == "Y":
-        settings.gameflags |= rset.GameFlags.ZEAL_END
-
-    if lost_worlds == "Y":
-        # At the moment, LW is not compatible with fast pendant
-        pass
-    else:
-        quick_pendant = input(
-            "Do you want the pendant to be charged upon entering the "
-            "future(p)? Y/N "
-        )
-        quick_pendant = quick_pendant.upper()
-        if quick_pendant == "Y":
-            settings.gameflags |= rset.GameFlags.FAST_PENDANT
-
-    locked_chars = input(
-        "Do you want characters to be further locked(c)? Y/N "
-    )
-    locked_chars = locked_chars.upper()
-    if locked_chars == "Y":
-        settings.gameflags |= rset.GameFlags.LOCKED_CHARS
-
-    tech_list = input("Do you want to randomize techs(te)? Y/N ")
-    tech_list = tech_list.upper()
-    if tech_list == "Y":
-        settings.techorder = rset.TechOrder.FULL_RANDOM
-        tech_list_balanced = input(
-            "Do you want tech order randomziation to be biased so that "
-            "less useful techs are more likely to appear earlier in the "
-            "tech list (tex)? Y/N "
-        )
-        tech_list_balanced = tech_list_balanced.upper()
-        if tech_list_balanced == "Y":
-            settings.techorder = rset.TechOrder.BALANCED_RANDOM
-    else:
-        settings.techorder = rset.TechOrder.NORMAL
-
-    unlocked_magic = input(
-        "Do you want the ability to learn all techs without visiting "
-        "Spekkio(m)? Y/N "
-    )
-    unlocked_magic = unlocked_magic.upper()
-    if unlocked_magic == "Y":
-        settings.gameflags |= rset.GameFlags.UNLOCKED_MAGIC
-
-    quiet_mode = input("Do you want to enable quiet mode (No music)(q)? Y/N ")
-    quiet_mode = quiet_mode.upper()
-    if quiet_mode == "Y":
-        settings.cosmetic_flags |= rset.CosmeticFlags.QUIET_MODE
-
-    chronosanity = input(
-        "Do you want to enable Chronosanity "
-        "(key items can appear in chests)? (cr)? Y/N "
-    )
-    chronosanity = chronosanity.upper()
-    if chronosanity == "Y":
-        settings.gameflags |= rset.GameFlags.CHRONOSANITY
-
-    duplicate_chars = input("Do you want to allow duplicte characters? ")
-    duplicate_chars = duplicate_chars.upper()
-    if duplicate_chars == "Y":
-        settings.gameflags |= rset.GameFlags.DUPLICATE_CHARS
-        same_char_techs = input(
-            "Should duplicate characters learn dual techs? Y/N "
-        ).upper()
-        if same_char_techs == 'Y':
-            settings.gameflags |= rset.GameFlags.DUPLICATE_TECHS
-
-    tab_treasures = input("Do you want all treasures to be tabs(tb)? Y/N ")
-    tab_treasures = tab_treasures.upper()
-    if tab_treasures == "Y":
-        settings.gameflags |= rset.GameFlags.TAB_TREASURES
-
-    shop_prices = input(
-        "Do you want shop prices to be Normal(n), Free(f), Mostly Random(m), "
-        "or Fully Random(r)? "
-    )
-    shop_prices = shop_prices.upper()
-    if shop_prices == "F":
-        settings.shopprices = rset.ShopPrices.FREE
-    elif shop_prices == "M":
-        settings.shopprices = rset.ShopPrices.MOSTLY_RANDOM
-    elif shop_prices == "R":
-        settings.shopprices = rset.ShopPrices.FULLY_RANDOM
-    elif shop_prices == 'N':
-        settings.shopprices = rset.ShopPrices.NORMAL
-    else:
-        print('Invalid Entry.  Defaulting to Normal prices.')
-        settings.shopprices = rset.ShopPrices.NORMAL
-
-    return settings
-
-
-def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "-c":
-        generate_from_command_line()
-    else:
-        print("Please run randomizergui.py for a graphical interface. \n"
-              "Either randomizer.py or randomizergui.py can be run with the "
-              "-c option to use\nthe command line.")
+    if args.json_spoilers:
+        writer.write_json_spoiler_log(args.output_path)
+        print(f"json spoilers: {writer.json_spoiler_path}")
 
 
 if __name__ == "__main__":

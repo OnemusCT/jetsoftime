@@ -11,10 +11,9 @@ import ctrom
 import ctstrings
 import eventfunction
 import eventcommand
-import treasuredata
 
 import randoconfig as cfg
-import randosettings as rset
+
 
 
 def get_character_assignment() -> dict[ctenums.RecruitID, ctenums.CharID]:
@@ -42,9 +41,7 @@ def get_character_assignment() -> dict[ctenums.RecruitID, ctenums.CharID]:
     avail_spots.remove(RID.PROTO_DOME)
 
     random.shuffle(avail_chars)
-    remaining_assignments = {
-        rid: char_id for rid, char_id in zip(avail_spots, avail_chars)
-    }
+    remaining_assignments = dict(zip(avail_spots, avail_chars))
 
     # Add the remaining assignments to the main dict
     assign_dict.update(remaining_assignments)
@@ -245,9 +242,6 @@ def force_castle_before_ozzies_fort(ct_rom: ctrom.CTRom):
         0x7F01FF, OP.BITWISE_AND_NONZERO, 0x04, 1, 0
     )
 
-    crystal_anim = EC.get_blank_command(0xAA)
-    crystal_anim.args[0] = 0x05
-
     crystal_anim = EF()
     crystal_anim.add(EC.generic_one_arg(0xAB, 0xA))
     crystal_anim.add(EC.generic_one_arg(0xAA, 0xE))
@@ -345,9 +339,11 @@ def insert_recruit_lock(ct_rom: ctrom.CTRom,
     #   3) Kick the user back to party shuffle if required characters
     #      are missing
     #   4) Set the character locks
-    loc_id = config.char_assign_dict[recruit_spot].loc_id
+    recruit = config.char_assign_dict[recruit_spot]
+    if not isinstance(recruit, cfg.pcrecruit.CharRecruit):
+        raise TypeError("Recruit Spot has the wrong type (StarterChar?)")
+    loc_id = recruit.loc_id
     script = ct_rom.script_manager.get_script(loc_id)
-    obj_id = config.char_assign_dict[recruit_spot].recruit_obj_id
 
     chars = list(required_chars)
     char_lock_bytes = functools.reduce(
@@ -385,43 +381,10 @@ def insert_recruit_lock(ct_rom: ctrom.CTRom,
         )
     func.add(EC.assign_val_to_mem(char_lock_bytes, 0x7F01DF, 1))
 
-    start = script.get_object_start(obj_id)
-    end = script.get_object_end(obj_id)
-
-    # Find the Add to reserve command
-    pos, cmd = script.find_command([0xD0], start, end)
-
-    # There should be a jump immediately before.  This jump jumps over the
-    # add to reserve command when there are only 2 PCs
-    jump_cmd_pos = pos - 2
-
-    # Make sure it's really the forward jump
-    if script.data[jump_cmd_pos] != 0x10:
-        # This happens in castle because castle *always* has 3+ PCs.
-        if recruit_spot != ctenums.RecruitID.CASTLE:
-            print('Error: No jump prior to add reserve and not Castle.')
-            quit()
-        else:
-            jump_pos = None
-    else:
-        # store the location of the jump for later.
-        jump_pos = jump_cmd_pos + 1
-
-    pos += len(cmd)
-
-    if script.data[pos] != EC.replace_characters().command:
-        print('Failed to find replace characters')
-        quit()
-
+    switch_pos = script.find_exact_command(EC.replace_characters())
     script.modified_strings = True
-    script.delete_commands(pos)
-    script.insert_commands(func.get_bytearray(), pos)
-
-    # Now fix that jump to jump over everything we just added.
-    # If it needs fixing anyway.
-    if jump_pos is not None:
-        after_pos = pos + len(func)
-        script.data[jump_pos] = after_pos - jump_pos
+    script.insert_commands(func.get_bytearray(), switch_pos)
+    script.delete_commands(switch_pos+len(func))
 
     # for string in script.strings:
     #     print(ctstrings.CTString.ct_bytes_to_ascii(string))
@@ -470,7 +433,7 @@ def set_ending_after_ozzies_fort(ct_rom: ctrom.CTRom):
     )
     end_str_b = orig_tg_script.strings[1]
     end_str = ctstrings.CTString.ct_bytes_to_ascii(end_str_b)
-    end_str = end_str.replace('Lavos', 'FalconHit')
+    end_str = end_str.replace('Lavos', 'akuheish')
     new_end_str_b = ctstrings.CTString.from_str(end_str)
     new_end_str_b.compress()
     orig_tg_script.strings[1] = new_end_str_b

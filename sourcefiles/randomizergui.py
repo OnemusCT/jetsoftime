@@ -1,25 +1,26 @@
 # python standard libraries
-from functools import partial, reduce
+from functools import reduce
+import copy
 import os
 import pathlib
 import pickle
 import random
-import sys
 import threading
 import tkinter as tk
 from tkinter import ttk
 from tkinter.filedialog import askopenfilename
 from tkinter.filedialog import askdirectory
 from tkinter import messagebox
-
+from typing import Optional
 
 # custom/local libraries
+import bucketgui
 import randomizer
-import bossdata
+import bossrandotypes as rotypes
 from randosettings import Settings, GameFlags, Difficulty, ShopPrices, \
-    TechOrder, TabSettings, TabRandoScheme, ROSettings, CosmeticFlags, \
-    BucketSettings, GameMode, MysterySettings
-from ctenums import LocID, BossID, ActionMap, InputMap
+    TechOrder, TabSettings, TabRandoScheme, ROSettings, ROFlags, \
+    CosmeticFlags, GameMode, MysterySettings, CharNames
+from ctenums import ActionMap, InputMap
 import ctoptions
 import ctrom
 import ctstrings
@@ -74,13 +75,12 @@ class CreateToolTip(object):
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry("+%d+%d" % (x, y))
         displaytext = self.text
-        if type(self.text) == tk.StringVar:
+        if isinstance(self.text, tk.StringVar):
             displaytext = self.text.get()
         label = tk.Label(self.tw, text=displaytext, justify='left',
                          background="#ffffff", relief='solid', borderwidth=1,
                          wraplength=self.wraplength)
         label.pack(ipadx=1)
-
 
     def hidetip(self):
         tw = self.tw
@@ -107,6 +107,10 @@ class RandoGUI:
         for x in list(CosmeticFlags):
             self.cosmetic_flag_dict[x] = tk.IntVar()
 
+        self.ro_flag_dict = dict()
+        for x in list(ROFlags):
+            self.ro_flag_dict[x] = tk.IntVar()
+
         self.flag_checkboxes = dict()
 
         self.item_difficulty = tk.StringVar()
@@ -128,48 +132,41 @@ class RandoGUI:
         self.tab_rando_scheme = tk.StringVar()
         self.tab_success_chance = tk.DoubleVar()
 
-        # DC stuff
-        # By default, dc puts no restrictions on assignment
+        # RC stuff
+        # By default, rc puts no restrictions on assignment
         self.char_choices = [[tk.IntVar(value=1) for i in range(7)]
                              for j in range(7)]
 
+        self.duplicate_chars = tk.IntVar(value=0)
         self.duplicate_duals = tk.IntVar(value=0)
 
         # ro settings
         self.preserve_part_count = tk.IntVar(value=0)
 
-        # bucket stuff
-        # I cannot create the scales until I have an object to attach them
-        # to.  Putting these lines here just so I know they exist.
-        self.bucket_frag_required_scale = None
-        self.bucket_frag_required = tk.IntVar(value=20)
-        self.bucket_frag_extra_scale = None
-        self.bucket_frag_extra = tk.IntVar(value=10)
-
         self.ctopts = {
-            'battle_speed': tk.IntVar(value = 5),
-            'stereo_audio': tk.BooleanVar(value = True),
-            'custom_control_pad': tk.BooleanVar(value = False),
-            'save_menu_cursor': tk.BooleanVar(value = False),
-            'active_battle': tk.BooleanVar(value = False),
-            'skill_item_info': tk.BooleanVar(value = True),
-            'menu_background': tk.IntVar(value = 1),
-            'battle_msg_speed': tk.IntVar(value = 5),
-            'save_battle_cursor': tk.BooleanVar(value = False),
-            'save_tech_cursor': tk.BooleanVar(value = True),
-            'battle_gauge_style': tk.IntVar(value = 1),
-            'consistent_paging': tk.BooleanVar(value = False)
+            'battle_speed': tk.IntVar(value=5),
+            'stereo_audio': tk.BooleanVar(value=True),
+            'custom_control_pad': tk.BooleanVar(value=False),
+            'save_menu_cursor': tk.BooleanVar(value=False),
+            'active_battle': tk.BooleanVar(value=False),
+            'skill_item_info': tk.BooleanVar(value=True),
+            'menu_background': tk.IntVar(value=1),
+            'battle_msg_speed': tk.IntVar(value=5),
+            'save_battle_cursor': tk.BooleanVar(value=False),
+            'save_tech_cursor': tk.BooleanVar(value=True),
+            'battle_gauge_style': tk.IntVar(value=1),
+            'consistent_paging': tk.BooleanVar(value=False)
         }
 
         self.controller_binds = {
-            ActionMap.CONFIRM: tk.StringVar(value = InputMap.A_BUTTON),
-            ActionMap.CANCEL: tk.StringVar(value = InputMap.B_BUTTON),
-            ActionMap.MENU: tk.StringVar(value = InputMap.X_BUTTON),
-            ActionMap.DASH: tk.StringVar(value = InputMap.B_BUTTON),
-            ActionMap.MAP: tk.StringVar(value = InputMap.SELECT_BUTTON),
-            ActionMap.WARP: tk.StringVar(value = InputMap.Y_BUTTON),
-            ActionMap.PG_UP: tk.StringVar(value = InputMap.R_SHOULDER),
-            ActionMap.PG_DN: tk.StringVar(value = InputMap.L_SHOULDER)
+            ActionMap.CONFIRM: tk.StringVar(value=InputMap.A_BUTTON),
+            ActionMap.CANCEL: tk.StringVar(value=InputMap.B_BUTTON),
+            ActionMap.MENU: tk.StringVar(value=InputMap.X_BUTTON),
+            ActionMap.DASH: tk.StringVar(value=InputMap.B_BUTTON),
+            ActionMap.MAP: tk.StringVar(value=InputMap.SELECT_BUTTON),
+            ActionMap.WARP: tk.StringVar(value=InputMap.Y_BUTTON),
+            ActionMap.PG_UP: tk.StringVar(value=InputMap.R_SHOULDER),
+            ActionMap.PG_DN: tk.StringVar(value=InputMap.L_SHOULDER)
         }
 
         # Mystery Settings.
@@ -228,48 +225,51 @@ class RandoGUI:
         self.notebook = ttk.Notebook(self.main_window)
         self.notebook.pack(expand=True)
 
+        self.bucket_page = bucketgui.BucketPage(self.notebook)
+        
         self.general_page = self.get_general_page()
         self.tabs_page = self.get_tabs_page()
-        self.dc_page = self.get_dc_page()
+        self.rc_page = self.get_rc_page()
         self.qol_page = self.get_qol_page()
         self.cosmetic_page = self.get_cosmetic_page()
         self.options_page = self.get_options_page()
         self.extra_page = self.get_extra_page()
         self.mystery_page = self.get_mystery_page()
 
+
         # The boss rando page is a little different because the Tk.Listbox
         # does not use an underlying variable.  Instead the
         # self.location_listbox and self.boss_listbox will report their
         # selections as indices into the following two lists
-        self.boss_locations = LocID.get_boss_locations()
-        self.bosses = list(BossID)
+        self.boss_locations = list(rotypes.BossSpotID)
+
+        BossID = rotypes.BossID
+        self.bosses = rotypes.get_assignable_bosses()
+        self.bosses = sorted(self.bosses, key=str)
 
         no_shuffle_bosses = [
-            BossID.DRAGON_TANK, BossID.R_SERIES, BossID.MUD_IMP,
+            # BossID.DRAGON_TANK, BossID.R_SERIES, BossID.MUD_IMP,
             BossID.MAGUS, BossID.BLACK_TYRANO, BossID.MAMMON_M,
             BossID.LAVOS_CORE, BossID.LAVOS_SHELL, BossID.INNER_LAVOS,
             BossID.ZEAL, BossID.ZEAL_2, BossID.TWIN_BOSS
         ]
 
         for x in no_shuffle_bosses:
-            self.bosses.remove(x)
+            if x in self.bosses:
+                self.bosses.remove(x)
 
-        self.display_dup_char_settings_window
         self.ro_page = self.get_ro_page()
 
-        self.notebook.add(self.general_page,
-                          text='General')
-
-        self.notebook.add(self.tabs_page,
-                          text='Tabs')
-
-        self.notebook.add(self.dc_page, text='DC')
+        self.notebook.add(self.general_page, text='General')
+        self.notebook.add(self.tabs_page, text='Tabs')
+        self.notebook.add(self.rc_page, text='RC')
         self.notebook.add(self.ro_page, text='RO')
         self.notebook.add(self.qol_page, text='QoL')
         self.notebook.add(self.cosmetic_page, text='Cos')
         self.notebook.add(self.options_page, text='Opt')
         self.notebook.add(self.extra_page, text='Ext')
         self.notebook.add(self.mystery_page, text='Mys')
+        self.notebook.add(self.bucket_page, text='Bucket')
 
         # This can only be called after all of the widgets are initialized
         self.load_settings_file()
@@ -279,7 +279,7 @@ class RandoGUI:
 
     def set_settings(self, new_settings: Settings):
         self.__settings = new_settings
-        # print(self.__settings.char_choices)
+        # print(self.__settings.char_settings.choices)
         # print(self.__settings.gameflags)
         # print(self.__settings.get_flag_string())
         self.update_gui_vars()
@@ -292,8 +292,8 @@ class RandoGUI:
         filePath = ""
         if os.name == "nt":
             # If on Windows, put the settings file in roaming appdata
-            dir = os.getenv('APPDATA')
-            filePath = pathlib.Path(dir).joinpath('JetsOfTime')
+            direct = os.getenv('APPDATA')
+            filePath = pathlib.Path(direct).joinpath('JetsOfTime')
         else:
             # If on Mac/Linux, make it a hidden file in the home directory
             filePath = pathlib.Path(os.path.expanduser('~')).joinpath(
@@ -323,7 +323,7 @@ class RandoGUI:
                 try:
                     [settings, input_file, output_dir] = pickle.load(infile)
                     self.settings = settings
-                except (ValueError, AttributeError, EOFError, KeyError):
+                except (ValueError, AttributeError, EOFError, KeyError) as ex:
                     tk.messagebox.showinfo(
                         title='Settings Error',
                         message='Unable to load saved settings.  This often'
@@ -376,7 +376,10 @@ class RandoGUI:
         cosmetic_flags = [x for x in list(CosmeticFlags)
                           if self.cosmetic_flag_dict[x].get() == 1]
 
-        
+        # RO Flags
+        ro_flags = [x for x in ROFlags
+                    if self.ro_flag_dict[x].get() == 1]
+
         # In-game options
         self.settings.ctoptions = ctoptions.CTOpts()
 
@@ -392,23 +395,17 @@ class RandoGUI:
                 continue
 
             setattr(self.settings.ctoptions, attr, value.get())
-        
+
         for action, button in self.controller_binds.items():
-            value = InputMap[button.get().upper().replace(' ','_')]
+            value = InputMap[button.get().upper().replace(' ', '_')]
             self.settings.ctoptions.controller_binds.mappings[action] = value
 
-
-        self.settings.char_names[0] = self.char_names['Crono'].get()
-        self.settings.char_names[1] = self.char_names['Marle'].get()
-        self.settings.char_names[2] = self.char_names['Lucca'].get()
-        self.settings.char_names[3] = self.char_names['Robo'].get()
-        self.settings.char_names[4] = self.char_names['Frog'].get()
-        self.settings.char_names[5] = self.char_names['Ayla'].get()
-        self.settings.char_names[6] = self.char_names['Magus'].get()
-        self.settings.char_names[7] = self.char_names['Epoch'].get()
+        for name in CharNames.default():
+            self.settings.char_settings.names[name] = self.char_names[name].get()
 
         self.settings.gameflags = \
             reduce(lambda a, b: a | b, flags, GameFlags(False))
+        self.settings.initial_flags = copy.deepcopy(self.settings.gameflags)
         self.settings.cosmetic_flags = \
             reduce(lambda a, b: a | b, cosmetic_flags, CosmeticFlags(False))
 
@@ -427,12 +424,12 @@ class RandoGUI:
                 speed_max=self.speed_tab_max.get()
             )
 
-        # DC (dup duals already taken, just char choices)
+        # RC (dup duals already taken, just char choices)
         for i in range(7):
-            self.settings.char_choices[i] = []
+            self.settings.char_settings.choices[i] = []
             for j in range(7):
                 if self.char_choices[i][j].get() == 1:
-                    self.settings.char_choices[i].append(j)
+                    self.settings.char_settings.choices[i].append(j)
 
         # RO Settings
         # print(self.bosses)
@@ -442,20 +439,16 @@ class RandoGUI:
         loc_list = [self.boss_locations[i]
                     for i in self.boss_location_listbox.curselection()]
 
-        self.settings.ro_settings = ROSettings(
-            loc_list,
-            boss_list,
-            self.preserve_part_count.get() == 1,
-        )
+        if loc_list:
+            roset = ROSettings(loc_list, boss_list, False)
+        else:
+            roset = ROSettings.from_game_mode(self.settings.game_mode, bosses=boss_list)
+        self.settings.ro_settings = roset
+        self.settings.ro_settings.flags = \
+            reduce(lambda a, b: a | b, ro_flags, ROFlags(False))
 
         # Bucket
-        num_fragments = \
-            self.bucket_frag_required.get() + self.bucket_frag_extra.get()
-
-        self.settings.bucket_settings = BucketSettings(
-            num_fragments=num_fragments,
-            needed_fragments=self.bucket_frag_required.get()
-        )
+        self.settings.bucket_settings = self.bucket_page.get_bucket_settings()
 
         # Mystery settings
         ms = MysterySettings()
@@ -508,14 +501,8 @@ class RandoGUI:
                 self.cosmetic_flag_dict[x].set(0)
 
         # Char names
-        self.char_names['Crono'].set(self.settings.char_names[0])
-        self.char_names['Marle'].set(self.settings.char_names[1])
-        self.char_names['Lucca'].set(self.settings.char_names[2])
-        self.char_names['Robo'].set(self.settings.char_names[3])
-        self.char_names['Frog'].set(self.settings.char_names[4])
-        self.char_names['Ayla'].set(self.settings.char_names[5])
-        self.char_names['Magus'].set(self.settings.char_names[6])
-        self.char_names['Epoch'].set(self.settings.char_names[7])
+        for name in CharNames.default():
+            self.char_names[name].set(self.settings.char_settings.names[name])
 
         increment_vars = [
             'menu_background',
@@ -565,10 +552,10 @@ class RandoGUI:
 
         self.tab_success_chance.set(self.settings.tab_settings.binom_success)
 
-        # DC char choices
+        # RC char choices
         for i in range(7):
             for j in range(7):
-                if j in self.settings.char_choices[i]:
+                if j in self.settings.char_settings.choices[i]:
                     self.char_choices[i][j].set(1)
                 else:
                     self.char_choices[i][j].set(0)
@@ -576,26 +563,24 @@ class RandoGUI:
         # push the ro flag lists
         ro_settings = self.settings.ro_settings
         boss_indices = [self.bosses.index(x)
-                        for x in ro_settings.boss_list]
+                        for x in ro_settings.bosses]
 
         for index in boss_indices:
             self.boss_listbox.select_set(index)
 
         boss_loc_indices = [self.boss_locations.index(x)
-                            for x in ro_settings.loc_list]
+                            for x in ro_settings.spots]
 
         for index in boss_loc_indices:
             self.boss_location_listbox.select_set(index)
 
-        self.preserve_part_count.set(int(ro_settings.preserve_parts))
+        self.preserve_part_count.set(
+            int(ROFlags.PRESERVE_PARTS in ro_settings.flags)
+        )
 
         # Bucket Settings
         bucket_settings = self.settings.bucket_settings
-        extra_frags = (bucket_settings.num_fragments -
-                       bucket_settings.needed_fragments)
-
-        self.bucket_frag_extra.set(int(extra_frags))
-        self.bucket_frag_required.set(int(bucket_settings.needed_fragments))
+        self.bucket_page.load_bucket_settings(bucket_settings)
 
         # Mystery Settings
         mys_settings = self.settings.mystery_settings
@@ -633,14 +618,13 @@ class RandoGUI:
         checkboxes = (
             self.chronosanity_checkbox,
             self.zeal_end_checkbox, self.boss_scaling_checkbox,
-            self.bucket_fragment_checkbox, self.unlocked_magic_checkbox,
+            self.unlocked_magic_checkbox,
             self.locked_chars_checkbox, self.fast_pendant_checkbox,
             self.boss_rando_checkbox
         )
 
         scales = (
-            self.bucket_frag_extra_scale, self.bucket_frag_required_scale,
-            self.tab_prob_scale
+            self.tab_prob_scale,
         )
 
         for checkbox in checkboxes:
@@ -667,13 +651,11 @@ class RandoGUI:
 
         ia_disabled_flags = [
             GF.ZEAL_END,
-            GF.BOSS_SCALE, GF.BUCKET_FRAGMENTS,
+            GF.BOSS_SCALE, GF.BUCKET_LIST,
         ]
 
         ia_disabled_elements = [
             self.zeal_end_checkbox, self.boss_scaling_checkbox,
-            self.bucket_fragment_checkbox, self.bucket_frag_extra_scale,
-            self.bucket_frag_required_scale,
             self.unlocked_magic_checkbox
         ]
 
@@ -687,19 +669,14 @@ class RandoGUI:
             for element in ia_disabled_elements:
                 element.config(state=tk.DISABLED)
 
-            self.bucket_frag_extra_scale.config(fg='grey')
-            self.bucket_frag_required_scale.config(fg='grey')
-
         loc_disabled_flags = [
             GF.ZEAL_END,
-            GF.BUCKET_FRAGMENTS,
+            GF.BUCKET_LIST,
             GF.BOSS_RANDO, GF.BOSS_SCALE, GF.BOSS_RANDO
         ]
 
         loc_disabled_elements = [
             self.zeal_end_checkbox, self.boss_scaling_checkbox,
-            self.bucket_fragment_checkbox, self.bucket_frag_extra_scale,
-            self.bucket_frag_required_scale,
             self.boss_rando_checkbox
         ]
 
@@ -713,18 +690,15 @@ class RandoGUI:
             for element in loc_disabled_elements:
                 element.config(state=tk.DISABLED)
 
-            self.bucket_frag_extra_scale.config(fg='grey')
-            self.bucket_frag_required_scale.config(fg='grey')
-
         if self.flag_dict[GameFlags.CHRONOSANITY].get() == 1:
             self.flag_dict[GameFlags.BOSS_SCALE].set(0)
             self.boss_scaling_checkbox.config(state=tk.DISABLED)
 
-        # Check DC Page
-        if self.flag_dict[GameFlags.DUPLICATE_CHARS].get() == 1:
-            self.notebook.tab(self.dc_page, state=tk.NORMAL)
+        # Check RC Page
+        if self.flag_dict[GameFlags.CHAR_RANDO].get() == 1:
+            self.notebook.tab(self.rc_page, state=tk.NORMAL)
         else:
-            self.notebook.tab(self.dc_page, state=tk.DISABLED)
+            self.notebook.tab(self.rc_page, state=tk.DISABLED)
 
         # Check RO Page
         if self.flag_dict[GameFlags.BOSS_RANDO].get() == 1:
@@ -737,6 +711,12 @@ class RandoGUI:
             self.notebook.tab(self.mystery_page, state=tk.NORMAL)
         else:
             self.notebook.tab(self.mystery_page, state=tk.DISABLED)
+
+        # Check Bucket Page
+        if self.flag_dict[GameFlags.BUCKET_LIST].get() == 1:
+            self.notebook.tab(self.bucket_page, state=tk.NORMAL)
+        else:
+            self.notebook.tab(self.bucket_page, state=tk.DISABLED)
 
         # check the tab rando slider
         if self.tab_rando_scheme.get() == \
@@ -799,19 +779,34 @@ class RandoGUI:
         return frame
 
     # Called by self.settings_valid
-    def dc_settings_valid(self) -> bool:
-        for i in range(7):
-            is_set = False
-            for j in self.char_choices[i]:
-                if j.get() == 1:
-                    is_set = True
+    def rc_settings_valid(self) -> bool:
+        # check all character identities have a model associated
+        model_missing = any(
+            not any(
+                model.get() == 1
+                for model in self.char_choices[identity]
+            )
+            for identity in range(7)
+        )
+        if model_missing:
+            return False
 
-            if not is_set:
+        # unless duplicate chars, also check all character models
+        # are associated with at least one identity
+        if not self.flag_dict[GameFlags.DUPLICATE_CHARS].get() == 1:
+            identity_missing = any(
+                not any(
+                    identity[model].get() == 1
+                    for identity in self.char_choices
+                )
+                for model in range(7)
+            )
+            if identity_missing:
                 return False
         return True
 
-    def get_dc_set_char_choices(self, parent):
-        dcframe = tk.Frame(
+    def get_rc_set_char_choices(self, parent):
+        rcframe = tk.Frame(
             parent, borderwidth=1, highlightbackground='black',
             highlightthickness=1
         )
@@ -819,15 +814,13 @@ class RandoGUI:
         row = 0
         col = 0
 
-        char_names = [
-            'Crono', 'Marle', 'Lucca', 'Robo', 'Frog', 'Ayla', 'Magus'
-        ]
+        char_names = CharNames.default()[:-1]
 
         row += 1
 
         for i in range(7):
             tk.Label(
-                dcframe,
+                rcframe,
                 text=char_names[i],
                 anchor='center'
             ).grid(row=row, column=(i+1))
@@ -836,7 +829,7 @@ class RandoGUI:
 
         for i in range(7):
             tk.Label(
-                dcframe,
+                rcframe,
                 text=char_names[i]+' choices:',
                 anchor="w"
             ).grid(row=row, column=0)
@@ -845,7 +838,7 @@ class RandoGUI:
 
             for j in range(7):
                 tk.Checkbutton(
-                    dcframe,  # text=char_names[j],
+                    rcframe,  # text=char_names[j],
                     variable=self.char_choices[i][j]
                 ).grid(row=row, column=col)
 
@@ -854,9 +847,9 @@ class RandoGUI:
             col = 0
             row += 1
 
-        return dcframe
+        return rcframe
 
-    def get_dc_set_autofill(self, parent):
+    def get_rc_set_autofill(self, parent):
 
         # Helper for setting the underlying variables
         def set_all(val):
@@ -864,81 +857,52 @@ class RandoGUI:
                 for j in self.char_choices[i]:
                     j.set(val)
 
-        dcframe = tk.Frame(
+        rcframe = tk.Frame(
             parent, borderwidth=1, highlightbackground='black',
             highlightthickness=1
         )
 
         row = 0
 
-        button = tk.Button(dcframe, text='Check All',
+        button = tk.Button(rcframe, text='Check All',
                            command=lambda: set_all(1))
         button.grid(row=row, column=0, columnspan=2)
 
-        button = tk.Button(dcframe, text='Uncheck All',
+        button = tk.Button(rcframe, text='Uncheck All',
                            command=lambda: set_all(0))
         button.grid(row=row, column=2, columnspan=2)
 
-        dcframe.pack(fill=tk.X)
+        rcframe.pack(fill=tk.X)
 
-        return dcframe
+        return rcframe
 
-    def get_dc_set_additional_options(self, parent):
+    def get_rc_set_additional_options(self, parent):
 
-        dcframe = tk.Frame(parent, borderwidth=1,
+        rcframe = tk.Frame(parent, borderwidth=1,
                            highlightbackground='black',
                            highlightthickness=1)
 
-        label = tk.Label(dcframe, text='Additional Options')
-        label.grid(row=0, column=0)
+        label = tk.Label(rcframe, text='Additional Options')
+        label.pack(anchor=tk.W)
 
         checkbutton = tk.Checkbutton(
-            dcframe, text='Duplicate Duals',
+            rcframe, text='Duplicate Chars',
+            variable=self.flag_dict[GameFlags.DUPLICATE_CHARS]
+        )
+        checkbutton.pack(anchor=tk.W)
+        CreateToolTip(checkbutton,
+                      'Check this to enable copies of the same character.')
+
+        checkbutton = tk.Checkbutton(
+            rcframe, text='Duplicate Duals',
             variable=self.flag_dict[GameFlags.DUPLICATE_TECHS]
         )
-        checkbutton.grid(row=1, column=0)
+        checkbutton.pack(anchor=tk.W)
         CreateToolTip(checkbutton,
                       'Check this to enable dual techs betweeen copies of the '
                       + 'same character (e.g. Ayla+Ayla beast toss).')
 
-        return dcframe
-
-    def display_dup_char_settings_window(self):
-
-        self.dc_set = tk.Toplevel(self.main_window)
-        self.dc_set.protocol('WM_DELETE_WINDOW',
-                             self.dc_set_verify_close)
-
-        instruction_frame = tk.Frame(self.dc_set)
-
-        tk.Label(
-            instruction_frame,
-            text='Indicate allowed character assignments.'
-        ).pack(expand=1, fill='both')
-
-        instruction_frame.pack(expand=1, fill='both')
-
-        # self.get_dc_set_char_choices().pack(expand=1, fill='both')
-        # self.get_dc_set_autofill().pack(expand=1, fill='both')
-        # self.get_dc_set_additional_options().pack(expand=1, fill='both')
-
-        # The Return button doesn't get its own function yet
-        dcframe = tk.Frame(
-            self.dc_set,
-            borderwidth=1,
-            highlightbackground='black',
-            highlightthickness=1
-        )
-
-        button = tk.Button(dcframe, text='Return',
-                           command=self.dc_set_verify_close)
-        button.grid()
-
-        dcframe.pack(expand=1, fill='both')
-
-        # Is this the right way to lock focus?
-        self.dc_set.focus_get()
-        self.dc_set.grab_set()
+        return rcframe
 
     def get_general_options(self, parent):
         frame = tk.Frame(
@@ -1199,21 +1163,23 @@ class RandoGUI:
             'to their normal locations.'
         )
 
-        # Duplicate Characters
-        self.dup_char_checkbox = tk.Checkbutton(
+        # Character Rando
+        self.char_rando_checkbox = tk.Checkbutton(
             frame,
-            text="Duplicate Characters (dc)",
-            variable=self.flag_dict[GameFlags.DUPLICATE_CHARS],
+            text="Character Rando (rc)",
+            variable=self.flag_dict[GameFlags.CHAR_RANDO],
             command=self.verify_settings
         )
-        self.dup_char_checkbox.grid(
+        self.char_rando_checkbox.grid(
             row=row, column=2, sticky=tk.W, columnspan=2
         )
         CreateToolTip(
-            self.dup_char_checkbox,
-            'Characters can now show up more than once. Quests are '
-            'activated and turned in based on the default NAME of the '
-            'character.')
+            self.char_rando_checkbox,
+            'Character identities are randomized. Each named character '
+            'identity uses a random character model; techs match character '
+            'model and identity determines progression (e.g. the '
+            'character named "Marle" could be an "Ayla" model with Ayla '
+            'techs and needed for Marle\'s Prism Shard quest).')
         row = row + 1
 
         checkbox = tk.Checkbutton(
@@ -1406,20 +1372,26 @@ class RandoGUI:
             if not mys_valid:
                 return
 
-        # Check for bad input from DC page
-        if not self.dc_settings_valid():
-            if self.flag_dict[GameFlags.DUPLICATE_CHARS].get() == 1:
-                messagebox.showerror(
-                    'DC Settings Error',
-                    'Each character must have at least one choice selected.'
+        # Check for bad input from RC page
+        if not self.rc_settings_valid():
+            rc_err = (
+                'Each character identity (row) must have at least '
+                'one model (column) selected.'
+            )
+            if not self.flag_dict[GameFlags.DUPLICATE_CHARS].get() == 1:
+                rc_err += (
+                    ' Each character model (column) must have at least '
+                    'one identity (row) selected.'
                 )
-                self.notebook.select(self.dc_page)
+            if self.flag_dict[GameFlags.CHAR_RANDO].get() == 1:
+                self.notebook.select(self.rc_page)
+                messagebox.showerror('RC Settings Error', rc_err)
                 return
             elif self.flag_dict[GameFlags.MYSTERY].get() == 1:
                 messagebox.showerror(
-                    'DC+Mystery Settings Error',
-                    'Each character must have at least one choice selected. '
-                    'Enable dc flag and adjust the settings.'
+                    'RC+Mystery Settings Error',
+                    rc_err,
+                    'Enable rc flag and adjust the settings.'
                 )
                 return
 
@@ -1427,8 +1399,8 @@ class RandoGUI:
         testbinds = {}
         for action, button in self.controller_binds.items():
             try:
-                value = InputMap[button.get().upper().replace(' ','_')]
-            except:
+                value = InputMap[button.get().upper().replace(' ', '_')]
+            except Exception:
                 messagebox.showerror(
                     'Options Controller Error',
                     'All button binds must be set.'
@@ -1436,7 +1408,7 @@ class RandoGUI:
                 self.notebook.select(self.options_page)
                 return
             testbinds[action] = value
-            
+
         if not ctoptions.ControllerBinds.is_valid_mappings(testbinds):
             messagebox.showerror(
                 'Options Controller Error',
@@ -1444,11 +1416,9 @@ class RandoGUI:
             )
             self.notebook.select(self.options_page)
             return
-        
 
         # Check for bad input from RO page
-
-        boss_loc_dict = bossdata.get_default_boss_assignment()
+        boss_loc_dict = rotypes.get_default_boss_assignment()
 
         if self.flag_dict[GameFlags.BOSS_RANDO].get() == 1 or \
            self.flag_dict[GameFlags.MYSTERY].get() == 1:
@@ -1461,7 +1431,7 @@ class RandoGUI:
                 # goes away in favor of 'Safe Mode' flags.
 
                 # Check one spots
-                one_part_bosses = BossID.get_one_part_bosses()
+                one_part_bosses = rotypes.get_one_part_bosses()
                 one_part_boss_ind = [
                     i for i in boss_selection_ind
                     if self.bosses[i] in one_part_bosses
@@ -1484,7 +1454,7 @@ class RandoGUI:
                     return False
 
                 # Check two spots -- some code duplication here is ugly
-                two_part_bosses = BossID.get_two_part_bosses()
+                two_part_bosses = rotypes.get_two_part_bosses()
                 two_part_boss_ind = [
                     i for i in boss_selection_ind
                     if self.bosses[i] in two_part_bosses
@@ -1597,6 +1567,12 @@ class RandoGUI:
                     f'{char_name}\'s name has unusual symbols.  This may be '
                     'unstable.'
                 )
+
+        passed, msg = self.bucket_page.validate_hints()
+        if not passed:
+            messagebox.showerror('Objective Error', msg)
+            self.notebook.select(self.bucket_page)
+            return False
 
         # Check the paths so that we don't have to do it later.
         input_path = pathlib.Path(self.input_file.get())
@@ -1724,39 +1700,35 @@ class RandoGUI:
 
             rando = randomizer.Randomizer(rom, is_vanilla=False)
             rando.settings = self.settings
-            rando.set_random_config()
-            out_rom = rando.get_generated_rom()
+            try:
+                rando.set_random_config()
+                out_rom = rando.get_generated_rom()
+            except Exception as ex:
+                tk.messagebox.showerror(
+                    title='Error generating rom!', message=str(ex)
+                )
+                # clear seed field on error
+                self.seed.set('')
+            else:
+                input_path = pathlib.Path(self.input_file.get())
 
-            input_path = pathlib.Path(self.input_file.get())
+                if self.output_dir is None or self.output_dir.get() == '':
+                    self.output_dir.set(str(input_path.parent))
 
-            if self.output_dir is None or self.output_dir.get() == '':
-                self.output_dir.set(str(input_path.parent))
+                base_name = pathlib.Path(input_path.name.split('.')[0])
+                out_dir = pathlib.Path(self.output_dir.get())
 
-            base_name = input_path.name.split('.')[0]
-            flag_str = self.settings.get_flag_string()
+                writer = randomizer.RandomizerWriter(rando, base_name=base_name)
+                writer.write_output_rom(out_dir)
+                writer.write_spoiler_log(out_dir)
+                writer.write_json_spoiler_log(out_dir)
 
-            out_filename = f"{base_name}.{flag_str}.{seed}.sfc"
-            out_dir = self.output_dir.get()
-            out_path = str(pathlib.Path(out_dir).joinpath(out_filename))
+                tk.messagebox.showinfo(
+                    title='Randomization Complete',
+                    message=f'Randomization Complete.  Seed: {seed}.'
+                )
 
-            with open(out_path, 'wb') as outfile:
-                outfile.write(out_rom)
-
-            spoiler_filename = f"{base_name}.{flag_str}.{seed}.spoilers.txt"
-            spoiler_path = \
-                str(pathlib.Path(out_dir).joinpath(spoiler_filename))
-            json_spoiler_filename = f"{base_name}.{flag_str}.{seed}.spoilers.json"
-            json_spoiler_path = \
-                str(pathlib.Path(out_dir).joinpath(json_spoiler_filename))
-            rando.write_spoiler_log(spoiler_path)
-            rando.write_json_spoiler_log(json_spoiler_path)
-
-            tk.messagebox.showinfo(
-                title='Randomization Complete',
-                message=f'Randomization Complete.  Seed: {seed}.'
-            )
-
-            self.save_settings()
+                self.save_settings()
 
         # Regardless of generation, stop the progress bar
         self.progressBar.stop()
@@ -1908,7 +1880,7 @@ class RandoGUI:
 
         return frame
 
-    def get_dc_page(self):
+    def get_rc_page(self):
         frame = ttk.Frame(self.notebook)
 
         instruction_frame = tk.Frame(frame)
@@ -1920,9 +1892,9 @@ class RandoGUI:
 
         instruction_frame.pack(fill=tk.X)
 
-        self.get_dc_set_char_choices(frame).pack(fill=tk.X)
-        self.get_dc_set_autofill(frame).pack(fill=tk.X)
-        self.get_dc_set_additional_options(frame).pack(fill=tk.X)
+        self.get_rc_set_char_choices(frame).pack(fill=tk.X)
+        self.get_rc_set_autofill(frame).pack(fill=tk.X)
+        self.get_rc_set_additional_options(frame).pack(fill=tk.X)
 
         return frame
 
@@ -2016,7 +1988,7 @@ class RandoGUI:
         # frame for three special buttons
         frame = ttk.Frame(outerframe)
 
-        boss_loc_dict = bossdata.get_default_boss_assignment()
+        boss_loc_dict = rotypes.get_default_boss_assignment()
 
         # Helper method for propogating locations to bosses
         def location_to_boss():
@@ -2114,7 +2086,7 @@ class RandoGUI:
         checkbox = tk.Checkbutton(
             extraoptionframe,
             text='Boss Spot HPs',
-            variable=self.flag_dict[GameFlags.BOSS_SPOT_HP]
+            variable=self.ro_flag_dict[ROFlags.BOSS_SPOT_HP]
         )
         checkbox.pack(anchor=tk.W)
 
@@ -2238,69 +2210,181 @@ class RandoGUI:
             'available if Frog is among the starters.'
         )
 
-        self.bucket_fragment_checkbox = tk.Checkbutton(
+        CreateToolTip(
+            checkbox,
+            'Players start without wings on the '
+            'Epoch.  The \'Jets of Time\' can be obtained and turned in '
+            'to Dalton in the Snail Stop to upgrade the Epoch.'
+        )
+
+        checkbox = tk.Checkbutton(
             frame,
-            text='Bucket Fragments (k)',
-            variable=self.flag_dict[GameFlags.BUCKET_FRAGMENTS]
+            text='Bucket List',
+            variable=self.flag_dict[GameFlags.BUCKET_LIST],
+            command=self.verify_settings
         )
-        self.bucket_fragment_checkbox.pack(anchor=tk.W)
+        checkbox.pack(anchor=tk.W)
 
         CreateToolTip(
-            self.bucket_fragment_checkbox,
-            'New items called \"Fragments\" are scattered throughout the '
-            'game.  Upon collecting the required amount, the bucket in the '
-            'End of Time will double xp/tp gain and take you to Lavos.'
+            checkbox,
+            'Allow for objectives to control bucket activation.'
         )
 
-        scaleframe = ttk.Frame(frame)
-        label = tk.Label(scaleframe, text='Required:', width=10)
-        label.pack(side=tk.LEFT, anchor=tk.W)
-        self.bucket_frag_required_scale = tk.Scale(
-            scaleframe,
-            from_=0,
-            to=50,
-            length=300,
-            resolution=1,
-            orient=tk.HORIZONTAL,
-            variable=self.bucket_frag_required
+        checkbox = tk.Checkbutton(
+            frame,
+            text='Tech Damage Randomization',
+            variable=self.flag_dict[GameFlags.TECH_DAMAGE_RANDO],
         )
+        checkbox.pack(anchor=tk.W)
+
         CreateToolTip(
-            self.bucket_frag_required_scale,
-            'How many fragments are needed to unlock the bucket.'
+            checkbox,
+            'Randomize damage inflicted by single techs.'
         )
+
+        ercheck = tk.Checkbutton(
+            frame,
+            text='Element Randomization',
+            variable=self.flag_dict[GameFlags.ELEMENT_RANDO]
+        )
+        ercheck.pack(anchor=tk.W)
+
+        CreateToolTip(
+            ercheck,
+            'Shuffle the 4 elements among characters and Robo techs.'
+        )
+
+        plus_ki_flags = [
+            GameFlags.RESTORE_JOHNNY_RACE, GameFlags.RESTORE_TOOLS
+        ]
+
+        adjust_spot_flags = [
+            GameFlags.ADD_BEKKLER_SPOT, GameFlags.ADD_OZZIE_SPOT,
+            GameFlags.ADD_RACELOG_SPOT, GameFlags.VANILLA_ROBO_RIBBON,
+            GameFlags.ADD_CYRUS_SPOT, GameFlags.REMOVE_BLACK_OMEN_SPOT
+        ]
+
+        ki_neutral_flags = [
+            GameFlags.UNLOCKED_SKYGATES, GameFlags.ADD_SUNKEEP_SPOT,
+            GameFlags.SPLIT_ARRIS_DOME, GameFlags.VANILLA_DESERT,
+            GameFlags.ROCKSANITY
+        ]
+
+        flag_names = {
+            GameFlags.UNLOCKED_SKYGATES: 'Unlocked Skygates',
+            GameFlags.ADD_SUNKEEP_SPOT: 'Add Sun Keep Spot',
+            GameFlags.ADD_BEKKLER_SPOT: 'Add Bekkler Spot',
+            GameFlags.ADD_CYRUS_SPOT: 'Add Cyrus Grave Spot',
+            GameFlags.RESTORE_TOOLS: 'Restore Tools',
+            GameFlags.ADD_OZZIE_SPOT: 'Add Ozzie\'s Fort Spot',
+            GameFlags.RESTORE_JOHNNY_RACE: 'Restore Johnny Race',
+            GameFlags.ADD_RACELOG_SPOT: 'Add Race Log Spot',
+            GameFlags.REMOVE_BLACK_OMEN_SPOT: 'Remove Black Omen Spot',
+            GameFlags.SPLIT_ARRIS_DOME: 'Split Arris Dome',
+            GameFlags.VANILLA_ROBO_RIBBON: 'Vanilla Robo Ribbon',
+            GameFlags.VANILLA_DESERT: 'Vanilla Desert',
+            GameFlags.ROCKSANITY: 'Rocksanity',
+        }
+        tooltip_text = {
+            GameFlags.UNLOCKED_SKYGATES: (
+                'Skygates are open as soon as the Dark Ages are reached. '
+                'If Epoch Fail is selected, also moves the Jets turn-in to '
+                'The Blackbird Dock'
+            ),
+            GameFlags.ADD_SUNKEEP_SPOT: (
+                'The Moon Stone will charge into a random item, and the Sun '
+                'Stone can be found independently.'
+            ),
+            GameFlags.ADD_BEKKLER_SPOT: (
+                'After the C.Trigger is obtained, Bekkler will allow you to '
+                'play the vanilla Clone game for random Key Item.'
+            ),
+            GameFlags.ADD_CYRUS_SPOT: (
+                'Interacting with Cyrus\'s grave with Frog will yield a KI '
+                'instead of a stat boost'
+            ),
+            GameFlags.RESTORE_TOOLS: (
+                'Adds the Tools as a KI, and the Tools are required to fix '
+                'the Northern Ruins.'
+            ),
+            GameFlags.ADD_OZZIE_SPOT: (
+                'Adds a KI as a reward for defeating Ozzie in Ozzie\'s Fort'
+            ),
+            GameFlags.RESTORE_JOHNNY_RACE: (
+                'Adds the Gate Key as a KI which can be used by Crono to '
+                'race Johnny'
+            ),
+            GameFlags.ADD_RACELOG_SPOT: (
+                'Adds a KI in the Lab32 Race Log chest.'
+            ),
+            GameFlags.REMOVE_BLACK_OMEN_SPOT: (
+                'Removes Black Omen rock chest as a KI location. Currently '
+                'only relevant when Rocksanity is used.'
+            ),
+            GameFlags.SPLIT_ARRIS_DOME: (
+                'Adds a KI as a reward for interacting with the corpse in '
+                'Arris Dome Food Locker.  Adds the Seed as a KI.  Changes the '
+                'normal Doan KI reward to additionally require the Seed.'
+            ),
+            GameFlags.VANILLA_ROBO_RIBBON: (
+                'The Robo Ribbon is removed from the KI pool.  Instead, a '
+                'permanent stat boost of +10 Mdef and +3 speed is rewarded '
+                'when the Geno Dome is completed.'
+            ),
+            GameFlags.VANILLA_DESERT: (
+                'The Desert begins locked and is only unlocked by talking to '
+                'the plant lady in Zeal palace.'
+            ),
+            GameFlags.ROCKSANITY: (
+                'Rocks are added to the KI pool and rock locations will yield '
+                'a KI.'
+            )
+        }
+
+        def gridify(frame: tk.Frame, flags: list):
+            row, col = 0, 0
+            for flag in flags:
+                checkbox = tk.Checkbutton(
+                    frame,
+                    text=flag_names[flag],
+                    variable=self.flag_dict[flag],
+                    width=22,
+                    anchor=tk.W
+                )
+                CreateToolTip(checkbox, text=tooltip_text[flag])
+                checkbox.grid(row=row, column=col, sticky=tk.W)
+                col += 1
+                if col == 2:
+                    col = 0
+                    row += 1
+
+        tk.Label(frame, text='Logic Tweaks').pack(anchor=tk.W)
+        logic_tweak_frame = tk.Frame(frame)
+
+        label = tk.Label(logic_tweak_frame, text='Flags that Add a KI:')
+        label.pack(anchor=tk.W)
         CreateToolTip(
             label,
-            'How many fragments are needed to unlock the bucket.'
+            'For each of these flags which are chosen, you MUST also select a '
+            'flag which adds a spot.'
         )
+        check_frame = tk.Frame(logic_tweak_frame)
+        gridify(check_frame, plus_ki_flags)
+        check_frame.pack(anchor=tk.W, padx=10)
 
-        self.bucket_frag_required_scale.pack(side=tk.LEFT, anchor=tk.E)
-        scaleframe.pack(anchor=tk.W)
+        label = tk.Label(logic_tweak_frame, text='Flags that Add/Remove a KI Spot:')
+        label.pack(anchor=tk.W)
+        check_frame = tk.Frame(logic_tweak_frame)
+        gridify(check_frame, adjust_spot_flags)
+        check_frame.pack(anchor=tk.W, padx=10)
 
-        scaleframe = ttk.Frame(frame)
-        label = tk.Label(scaleframe, text='Extra:', width=10)
-        label.pack(side=tk.LEFT, anchor=tk.W)
-        self.bucket_frag_extra_scale = tk.Scale(
-            scaleframe,
-            from_=0,
-            to=50,
-            length=300,
-            resolution=1,
-            orient=tk.HORIZONTAL,
-            variable=self.bucket_frag_extra
-        )
-        CreateToolTip(
-            self.bucket_frag_extra_scale,
-            'How many extra fragments are available.  The total number of '
-            'fragments placed will be fragments needed + extra fragments.'
-        )
-        CreateToolTip(
-            label,
-            'How many extra fragments are available.  The total number of '
-            'fragments placed will be fragments needed + extra fragments.'
-        )
+        label = tk.Label(logic_tweak_frame, text='KI-count neutral Flags:')
+        label.pack(anchor=tk.W)
+        check_frame = tk.Frame(logic_tweak_frame)
+        gridify(check_frame, ki_neutral_flags)
+        check_frame.pack(anchor=tk.W, padx=10)
 
-        self.bucket_frag_extra_scale.pack(anchor=tk.E)
-        scaleframe.pack(anchor=tk.W)
+        logic_tweak_frame.pack(anchor=tk.W, padx=10)
 
         return frame
 
@@ -2356,11 +2440,19 @@ class RandoGUI:
             "Reduces the number of bright flashes in the game."
         )
 
+        checkButton = tk.Checkbutton(
+            frame,
+            text="AutoRun",
+            variable=self.cosmetic_flag_dict[CosmeticFlags.AUTORUN]
+        )
+        checkButton.pack(anchor=tk.W)
+        CreateToolTip(
+            checkButton,
+            "Characters run by default and walk if the run button is pressed."
+        )
+
         label = tk.Label(frame, text='Default Names:')
         label.pack(anchor=tk.W)
-
-        default_names = ['Crono', 'Marle', 'Lucca', 'Robo', 'Frog',
-                         'Ayla', 'Magus', 'Epoch']
 
         for name, var in self.char_names.items():
             tempframe = tk.Frame(frame)
@@ -2379,23 +2471,26 @@ class RandoGUI:
         self.get_ctoptions_frame(frame).pack(fill=tk.X)
 
         return frame
-        
+
     def get_ctoptions_frame(self, parent):
         frame = tk.Frame(
             parent
         )
-        
-        frame.columnconfigure([0,2], weight=1)
-        
+
+        frame.columnconfigure([0, 2], weight=1)
+
         label = tk.Label(frame, text='In-Game Options')
-        label.grid(row=0, column=1, sticky = 'we')
+        label.grid(row=0, column=1, sticky='we')
         CreateToolTip(
             label,
-            'New games will start with these settings. Saved games with differing settings are not affected.'
+            'New games will start with these settings. '
+            'Saved games with differing settings are not affected.'
             )
 
-        self.get_ctoptions_config_frame(frame).grid(row=1, column=1, sticky='wen')
-        self.get_ctoptions_assignment_frame(frame).grid(row=2, column=1, sticky='we')
+        self.get_ctoptions_config_frame(frame).grid(
+            row=1, column=1, sticky='wen')
+        self.get_ctoptions_assignment_frame(frame).grid(
+            row=2, column=1, sticky='we')
 
         return frame
 
@@ -2407,21 +2502,63 @@ class RandoGUI:
 
         frame.columnconfigure(1, weight=1)
 
-        #dicts instead of tuples?
+        # dicts instead of tuples?
         checkboxes = {
-            'Stereo Audio': ('stereo_audio', 'Audio output is dual channel, rather than single channel.'),
-            'Save Menu Cursor': ('save_menu_cursor', 'The menu saves the last page displayed, and starts on it every time the menu opens. Additionally, in menu, inventory cursor position is saved.'),
-            'Save Battle Cursor': ('save_battle_cursor', 'Battle cursor position is saved for each character. When changing which character to command, the cursor moves to that character\'s previously-used option.'),
-            'Save Skill/Item Cursor': ('save_tech_cursor', 'Cursor positions for in-battle Tech and Inventory menus are saved, and returned to when the action is chosen.'),
-            'Skill/Item Info': ('skill_item_info', 'In battle, Tech and item descriptions are displayed when using them.'),
-            'Consistent Paging': ('consistent_paging', 'Make paging up and down consistent across different menus. Not able to be changed during game.') #yet
+            'Stereo Audio': (
+                'stereo_audio',
+                'Audio output is dual channel, rather than single channel.'
+            ),
+            'Save Menu Cursor': (
+                'save_menu_cursor',
+                'The menu saves the last page displayed, and starts on it '
+                'every time the menu opens. Additionally, in menu, inventory '
+                'cursor position is saved.'
+            ),
+            'Save Battle Cursor': (
+                'save_battle_cursor',
+                'Battle cursor position is saved for each character. '
+                'When changing which character to command, the cursor moves '
+                'to that character\'s previously-used option.'
+            ),
+            'Save Skill/Item Cursor': (
+                'save_tech_cursor',
+                'Cursor positions for in-battle Tech and Inventory menus are '
+                'saved, and returned to when the action is chosen.'
+            ),
+            'Skill/Item Info': (
+                'skill_item_info',
+                'In battle, Tech and item descriptions are displayed when '
+                'using them.'
+            ),
+            'Consistent Paging': (
+                'consistent_paging',
+                'Make paging up and down consistent across different menus. '
+                'Not able to be changed during game.'
+            )  # yet
         }
 
         dropdowns = {
-            'Menu Background': ('menu_background', 8, True, 'Controls the default menu background option. Corrosponds to the in-game options menu, i.e. 1 = default gray, 3 = Final Fantasy blue, etc'),
-            'Battle Speed': ('battle_speed', 8, True, 'In battle, controls how quickly ATB ticks occur. Lower numbers are faster.'),
-            'Battle Message Speed': ('battle_msg_speed', 8, True, 'In battle, controls how quickly messages about enemy status and loot drops disappear. Lower numbers are faster.'),
-            'Battle Gauge Style': ('battle_gauge_style', 3, False, 'In battle, controls position of ATB bars, character names, and HP/MP values.')
+            'Menu Background': (
+                'menu_background', 8, True,
+                'Controls the default menu background option. '
+                'Corrosponds to the in-game options menu, '
+                'i.e. 1 = default gray, 3 = Final Fantasy blue, etc'
+            ),
+            'Battle Speed': (
+                'battle_speed', 8, True,
+                'In battle, controls how quickly ATB ticks occur. '
+                'Lower numbers are faster.'
+            ),
+            'Battle Message Speed': (
+                'battle_msg_speed', 8, True,
+                'In battle, controls how quickly messages about enemy status '
+                'and loot drops disappear. Lower numbers are faster.'
+            ),
+            'Battle Gauge Style': (
+                'battle_gauge_style', 3, False,
+                'In battle, controls position of ATB bars, character names, '
+                'and HP/MP values.'
+            )
         }
 
         row = 0
@@ -2429,16 +2566,16 @@ class RandoGUI:
 
         for x, y in checkboxes.items():
             label = tk.Label(frame, text=x)
-            label.grid(row=row-((row // 5)*5), column=col+((row // 5)*2), sticky=tk.W)
-            CreateToolTip(
-                label,
-                y[1]
-            )
+            label.grid(row=row-((row // 5)*5),
+                       column=col+((row // 5)*2),
+                       sticky=tk.W)
+            CreateToolTip(label, y[1])
 
             tk.Checkbutton(
-                        frame,
-                        variable=self.ctopts[y[0]]
-                        ).grid(row=row-((row // 5)*5), column=col+((row // 5)*2)+1, sticky=tk.E)
+                frame,
+                variable=self.ctopts[y[0]]
+            ).grid(row=row-((row // 5)*5), column=col+((row // 5)*2)+1,
+                   sticky=tk.E)
 
             row += 1
 
@@ -2448,20 +2585,15 @@ class RandoGUI:
         for x, y in dropdowns.items():
             label = tk.Label(frame, text=x)
             label.grid(row=row, column=col, sticky=tk.W)
-            CreateToolTip(
-                label,
-                y[3]
-            )
+            CreateToolTip(label, y[3])
 
             dropdown = tk.OptionMenu(
-                                    frame,
-                                    self.ctopts[y[0]],
-                                    *[i for i in range(0+y[2],y[1]+y[2])],
-                                    )
+                frame,
+                self.ctopts[y[0]],
+                *[i for i in range(0+y[2], y[1]+y[2])],
+            )
             dropdown.grid(row=row, column=col+1, sticky=tk.E)
-
             row += 1
-
 
         return frame
 
@@ -2473,8 +2605,10 @@ class RandoGUI:
 
         frame.columnconfigure(0, weight=1)
 
-        frame.listbox_values = tk.StringVar(frame) # updates listbox on write
-        frame.ipc = tk.StringVar(frame, value='idle') #used for interframe comms, for gui design
+        # updates listbox on write
+        frame.listbox_values = tk.StringVar(frame)
+        # used for interframe comms, for gui design
+        frame.ipc = tk.StringVar(frame, value='idle')
 
         buttons_dropdowns = self.get_ctoptions_button_frame(frame)
         buttons_dropdowns.grid(row=0, column=0, sticky='we')
@@ -2487,27 +2621,23 @@ class RandoGUI:
     def get_ctoptions_button_listbox(self, parent):
 
         frame = ttk.Frame(parent)
+        # lbframe = ttk.Frame(frame)
+        row = 0
+        col = 0
 
-
-        #lbframe = ttk.Frame(frame)
-
-        row=0
-        col=0
-
-        #unsets all binds, writes ipc
+        # unsets all binds, writes ipc
         def _unset_all(self, listbox):
-            for action in [x for x in self.controller_binds.keys() if x not in (ActionMap.PG_DN, ActionMap.PG_UP)]:
+            for action in [x for x in self.controller_binds.keys()
+                           if x not in (ActionMap.PG_DN, ActionMap.PG_UP)]:
                 self.controller_binds[action].set('Unset')
             parent.ipc.set('unset_all')
-        
-        
-        #resets to vanilla, writes ipc
+
+        # resets to vanilla, writes ipc
         def _reset_to_vanilla(self, listbox):
             vanilla = ctoptions.ControllerBinds.get_vanilla().items()
 
             for x, y in vanilla:
                 self.controller_binds[x].set(y)
-                
             parent.ipc.set('vanilla')
 
         label = tk.Label(
@@ -2533,9 +2663,8 @@ class RandoGUI:
         )
 
         listbox.grid(row=row, column=col)
-        
-        #row += 1
-        
+
+        # row += 1
         button = tk.Button(
             frame, text="Unset All", command=lambda: _unset_all(self, listbox)
         )
@@ -2544,9 +2673,10 @@ class RandoGUI:
             button,
             'Unset all binds, except Page Up and Page Down.'
         )
-        
+
         button = tk.Button(
-            frame, text="Reset to Vanilla", command=lambda: _reset_to_vanilla(self, listbox)
+            frame, text="Reset to Vanilla",
+            command=lambda: _reset_to_vanilla(self, listbox)
         )
         button.grid(row=row+2, column=0, columnspan=2, sticky='n')
         CreateToolTip(
@@ -2558,40 +2688,31 @@ class RandoGUI:
 
     def get_ctoptions_button_frame(self, parent):
         frame = tk.Frame(
-            parent#, borderwidth=1, highlightbackground='black',
-            #highlightthickness=1
+            parent  # , borderwidth=1, highlightbackground='black',
+            # highlightthickness=1
         )
 
         frame.columnconfigure(0, weight=1)
-        
+
         def _read_ipc():
             command = parent.ipc.get()
-            if command not in ['unset_all','vanilla']:
+            if command not in ['unset_all', 'vanilla']:
                 return
-            #parent.ipc.set('idle')
+            # parent.ipc.set('idle')
             _update_gui()
-        
+
         def _build_input_list(action):
             '''
-            Builds the InputMap list for populating Remaining Buttons listbox and assignment dropdowns.
+            Builds the InputMap list for populating Remaining Buttons listbox
+            and assignment dropdowns.
             '''
-            
-            #Initially populate the list.
-            ret = [str(x) for x in InputMap]
-            
-            #Get the assigned buttons.
-            assigned = [y.get() for x, y in binds.items() if y.get() != 'Unset']
 
-            for x in InputMap:
-                # Force strings to enable comparisons; StringVars only output str, not StrIntEnum
-                x = str(x)
-                try:
-                    if x in assigned:
-                        ret.remove(x)
-                except:
-                    pass
-                    
-            return ret
+            # Get the assigned buttons.
+            assigned = [
+                y.get() for x, y in binds.items() if y.get() != 'Unset'
+            ]
+
+            return [str(x) for x in InputMap if str(x) not in assigned]
 
         def _update_display_pg(pg_strs):
             '''
@@ -2604,7 +2725,7 @@ class RandoGUI:
                 ]
 
             if self.ctopts['consistent_paging'].get():
-               data.reverse()
+                data.reverse()
 
             pg_strs['pg_up_label'].set(data[0][0])
             pg_strs['pg_dn_label'].set(data[1][0])
@@ -2646,7 +2767,7 @@ class RandoGUI:
             #update listbox in another frame
             parent.listbox_values.set(options)
             
-        def _construct_callback(action: ActionMap = None):
+        def _construct_callback(action: Optional[ActionMap] = None):
             '''
             Constructs callback function for gui usage.
             '''
@@ -2822,8 +2943,9 @@ class RandoGUI:
             GameFlags.BOSS_RANDO: 'Boss Rando',
             GameFlags.BOSS_SCALE: 'Boss Scale',
             GameFlags.UNLOCKED_MAGIC: 'UnlockMag',
-            GameFlags.BUCKET_FRAGMENTS: 'BucketFrag',
+            GameFlags.BUCKET_LIST: 'BucketList',
             GameFlags.CHRONOSANITY: 'Chronosanity',
+            GameFlags.CHAR_RANDO: 'CharRando',
             GameFlags.DUPLICATE_CHARS: 'DupeChars',
             GameFlags.LOCKED_CHARS: 'LockChars',
             GameFlags.TAB_TREASURES: 'TabTreas',
@@ -2886,15 +3008,10 @@ class RandoGUI:
         frame.pack(padx=20, anchor=tk.W, side=tk.TOP)
         return outer_frame
 
-
 def main():
     gui = RandoGUI()
     gui.main_window.mainloop()
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == "-c":
-        randomizer.generate_from_command_line()
-    else:
-        main()
-
+    main()

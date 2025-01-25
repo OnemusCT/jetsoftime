@@ -1,4 +1,3 @@
-import functools
 import hashlib
 
 import ctevent
@@ -39,11 +38,12 @@ class CTRom():
 
     def write_all_scripts_to_rom(self, clear_scripts: bool = True):
         script_dict = self.script_manager.script_dict
-        for loc_id in script_dict.keys():
-            if script_dict[loc_id] is not None:
-                self.script_manager.write_script_to_rom(loc_id)
-            elif clear_scripts:
-                script_dict[loc_id] = None
+        for loc_id in script_dict:
+            self.script_manager.write_script_to_rom(loc_id)
+
+        if clear_scripts:
+            self.script_manager.script_dict = {}
+            self.script_manager.orig_len_dict = {}
 
     @staticmethod
     def validate_ct_rom_file(filename: str) -> bool:
@@ -105,11 +105,12 @@ class CTRom():
             rom.write(int(0xFFFF0000).to_bytes(4, 'little'))
 
         def get_checksum(byte_seq: bytes) -> int:
-            return functools.reduce(
-                lambda x, y: (x+y) % 0x10000,
-                byte_seq,
-                0
-            )
+            # return functools.reduce(
+            #     lambda x, y: (x+y) % 0x10000,
+            #     byte_seq,
+            #     0
+            # )
+            return sum(byte_seq) % 0x10000
 
         # Compute the checksum of the first 0x400000
         checksum = get_checksum(self.rom_data.getbuffer()[0:0x400000])

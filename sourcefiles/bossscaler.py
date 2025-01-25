@@ -1,8 +1,10 @@
 from __future__ import annotations
 import copy
+from typing import Union, Literal
 
-from ctenums import EnemyID, TreasureID as TID, LocID, ItemID, \
-    RecruitID, CharID, BossID
+from bossrandotypes import BossID, BossSpotID
+import bossrandoscaling
+from ctenums import EnemyID, TreasureID as TID, ItemID, RecruitID, CharID
 
 from enemystats import EnemyStats
 # import logicfactory
@@ -13,7 +15,7 @@ import randosettings as rset
 # Order of stats:
 # HP, Level, Magic, Magic Def, Off, Def, XP, GP, TP
 # Sometimes xp, gp, tp are omitted at the end.
-scaling_data = {
+_scaling_data: dict[EnemyID, list[list[Union[int, Literal[""]]]]] = {
     EnemyID.RUST_TYRANO: [[6000, 16, 16, 50, 160, 127, 3000, 4000, 50],
                           [7000, 20, 20, 50, 170, 127, 3500, 6000, 60],
                           [8000, 30, 30, 50, 180, 127, 4000, 8000, 70]],
@@ -98,12 +100,12 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
 
     # To match the original implementation, make a dict with
     # ItemID --> TreasureID  for key items
-    key_item_dict = {config.treasure_assign_dict[loc].held_item: loc
+    key_item_dict = {config.treasure_assign_dict[loc].reward: loc
                      for loc in config.treasure_assign_dict.keys()
-                     if config.treasure_assign_dict[loc].held_item
+                     if config.treasure_assign_dict[loc].reward
                      in key_item_list}
 
-    boss_rank = dict()
+    boss_rank: dict[BossID, int] = {}
     boss_assign = config.boss_assign_dict
 
     # Treasure --> Location of Boss
@@ -111,12 +113,12 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
     # holds a key item.
     # Note:  Locations open at the start of the game (Denadoro, Bridge,
     #        Heckran) are never scaled, even if they have top rank items.
-    loc_dict: dict[TID, LocID] = {
-        TID.REPTITE_LAIR_KEY: LocID.REPTITE_LAIR_AZALA_ROOM,
-        TID.KINGS_TRIAL_KEY: LocID.KINGS_TRIAL_NEW,
-        TID.GIANTS_CLAW_KEY: LocID.GIANTS_CLAW_TYRANO,
-        TID.FIONA_KEY: LocID.SUNKEN_DESERT_DEVOURER,
-        TID.MT_WOE_KEY: LocID.MT_WOE_SUMMIT,
+    loc_dict: dict[TID, BossSpotID] = {
+        TID.REPTITE_LAIR_KEY: BossSpotID.REPTITE_LAIR,
+        TID.KINGS_TRIAL_KEY: BossSpotID.KINGS_TRIAL,
+        TID.GIANTS_CLAW_KEY: BossSpotID.GIANTS_CLAW,
+        TID.FIONA_KEY: BossSpotID.SUNKEN_DESERT,
+        TID.MT_WOE_KEY: BossSpotID.MT_WOE
     }
 
     # Treasure --> Item prerequisite
@@ -149,8 +151,8 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
         important_keys = list()
 
         for tid in important_tids:
-            if tid in [TID.SUN_PALACE_KEY, TID.ARRIS_DOME_KEY,
-                       TID.GENO_DOME_KEY]:
+            if tid in [TID.SUN_PALACE_KEY, TID.ARRIS_DOME_FOOD_LOCKER_KEY,
+                       TID.GENO_DOME_KEY, TID.ARRIS_DOME_DOAN_KEY]:
                 # If you found an important item in the future:
                 #   1) Set prison boss (dtank) to rank-1 if not already ranked
                 #   2) Set all future bosses to rank
@@ -160,7 +162,7 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
                 if ItemID.PENDANT not in important_keys:
                     important_keys.append(ItemID.PENDANT)
                 # print(f"Adding {ItemID.PENDANT} to important keys")
-                prisonboss = boss_assign[LocID.PRISON_CATWALKS]
+                prisonboss = boss_assign[BossSpotID.PRISON_CATWALKS]
 
                 # Skip rank assignment if dtank already has a higher rank.
                 # This will happen if keys of multiple levels are in future.
@@ -179,13 +181,14 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
                 # the highest ranked item there.  We'll preserve this.
 
                 # All future bosses have the same rank, so just pick Arris.
-                arrisboss = boss_assign[LocID.ARRIS_DOME_GUARDIAN_CHAMBER]
+                arrisboss = boss_assign[BossSpotID.ARRIS_DOME]
                 if arrisboss not in boss_rank or boss_rank[arrisboss] < rank:
-                    future_locs = [LocID.SUN_PALACE,
-                                   LocID.GENO_DOME_MAINFRAME,
-                                   LocID.ARRIS_DOME_GUARDIAN_CHAMBER]
-                    for loc in future_locs:
-                        futureboss = boss_assign[loc]
+                    future_spots = [
+                        BossSpotID.SUN_PALACE, BossSpotID.GENO_DOME,
+                        BossSpotID.ARRIS_DOME
+                    ]
+                    for spot in future_spots:
+                        futureboss = boss_assign[spot]
                         # print(f"Setting {futureboss} to rank {rank}")
                         boss_rank[futureboss] = rank
             elif tid == TID.MELCHIOR_KEY:
@@ -200,10 +203,10 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
                     if item not in important_keys:
                         important_keys.append(item)
 
-                trialboss = boss_assign[LocID.KINGS_TRIAL_NEW]
+                trialboss = boss_assign[BossSpotID.KINGS_TRIAL]
                 boss_rank[trialboss] = rank
 
-                prisonboss = boss_assign[LocID.PRISON_CATWALKS]
+                prisonboss = boss_assign[BossSpotID.PRISON_CATWALKS]
                 boss_rank[prisonboss] = rank-1
 
             else:
@@ -239,7 +242,7 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
 
     char_dict = config.char_assign_dict
     proto_char = char_dict[RecruitID.PROTO_DOME].held_char
-    factoryboss = boss_assign[LocID.FACTORY_RUINS_SECURITY_CENTER]
+    factoryboss = boss_assign[BossSpotID.FACTORY_RUINS]
 
     if rset.GameFlags.LOCKED_CHARS in settings.gameflags:
         if proto_char in [CharID.ROBO, CharID.AYLA]:
@@ -247,7 +250,7 @@ def determine_boss_rank(settings: rset.Settings, config: cfg.RandoConfig):
         elif proto_char in [CharID.CRONO, CharID.MAGUS]:
             boss_rank[factoryboss] = 2
 
-    config.boss_rank = boss_rank
+    config.boss_rank_dict = boss_rank
 
 
 # Perhaps replace config with the parts actually used: enemy, ai, atk data
@@ -259,29 +262,27 @@ def get_ranked_boss_stats(
 ) -> dict[EnemyID, EnemyStats]:
 
     boss = config.boss_data_dict[boss_id]
-    has_scaling_data = boss.scheme.ids[0] in scaling_data
+    has_scaling_data = boss.parts[0].enemy_id in _scaling_data
     scaled_stats = {}
 
     if has_scaling_data and rank > 0:
-        for part in boss.scheme.ids:
-            stats = copy.deepcopy(config.enemy_dict[part])
-            stat_list = scaling_data[part][rank-1]
+        for part in boss.parts:
+            stats = copy.deepcopy(config.enemy_dict[part.enemy_id])
+            stat_list = _scaling_data[part.enemy_id][rank-1]
             stats.replace_from_stat_list(stat_list)
 
-            scaled_stats[part] = stats
+            scaled_stats[part.enemy_id] = stats
     elif rank == 0:
         scaled_stats = {
-            part: copy.deepcopy(config.enemy_dict[part])
-            for part in boss.scheme.ids
+            part.enemy_id: copy.deepcopy(config.enemy_dict[part.enemy_id])
+            for part in boss.parts
         }
     else:
-        cur_level = boss.power
+        cur_level = bossrandoscaling.get_standard_boss_power(boss_id)
         new_level = cur_level + 4*rank
-        scaled_stats = boss.scale_to_power(
-            new_level,
-            config.enemy_dict,
-            config.enemy_atkdb,
-            config.enemy_aidb
+        scaled_stats = bossrandoscaling.scale_boss_scheme_progessive(
+            boss, cur_level, new_level, config.enemy_dict,
+            config.enemy_atk_db, config.enemy_ai_db
         )
 
     return scaled_stats

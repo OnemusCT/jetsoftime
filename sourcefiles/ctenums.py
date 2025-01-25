@@ -1,4 +1,8 @@
+from __future__ import annotations
 from enum import IntEnum, auto
+from typing import TypeVar, Type
+
+StrIntEnumT = TypeVar('StrIntEnumT', bound='StrIntEnum')
 
 
 class StrIntEnum(IntEnum):
@@ -9,101 +13,12 @@ class StrIntEnum(IntEnum):
         return x
 
     @classmethod
-    def str_dict(cls) -> dict:
-        return dict((x, str(x)) for x in list(cls))
+    def str_dict(cls: Type[StrIntEnumT]) -> dict[StrIntEnumT, str]:
+        return dict((x, str(x)) for x in cls)
 
     @classmethod
-    def inv_str_dict(cls) -> dict:
-        return dict((str(x), x) for x in list(cls))
-
-
-class BossID(StrIntEnum):
-    ATROPOS_XR = auto()
-    DALTON_PLUS = auto()
-    ELDER_SPAWN = auto()
-    FLEA = auto()
-    FLEA_PLUS = auto()
-    GIGA_MUTANT = auto()
-    GOLEM = auto()
-    GOLEM_BOSS = auto()
-    HECKRAN = auto()
-    LAVOS_SPAWN = auto()
-    MAMMON_M = auto()
-    MASA_MUNE = auto()
-    MEGA_MUTANT = auto()
-    MUD_IMP = auto()
-    NIZBEL = auto()
-    NIZBEL_2 = auto()
-    RETINITE = auto()
-    R_SERIES = auto()
-    RUST_TYRANO = auto()
-    SLASH_SWORD = auto()
-    SUPER_SLASH = auto()
-    SON_OF_SUN = auto()
-    TERRA_MUTANT = auto()
-    TWIN_BOSS = auto()
-    YAKRA = auto()
-    YAKRA_XIII = auto()
-    ZOMBOR = auto()
-
-    MOTHER_BRAIN = auto()
-    DRAGON_TANK = auto()
-    GIGA_GAIA = auto()
-    GUARDIAN = auto()
-
-    # Midbosses
-    MAGUS = auto()
-    BLACK_TYRANO = auto()
-
-    # End Bosses
-    LAVOS_SHELL = auto()
-    INNER_LAVOS = auto()
-    LAVOS_CORE = auto()
-    ZEAL = auto()
-    ZEAL_2 = auto()
-
-    @classmethod
-    def get_extra_bosses(cls):
-        return (
-            cls.ATROPOS_XR,
-            cls.DALTON_PLUS,
-            cls.GOLEM_BOSS,
-            cls.MUD_IMP
-        )
-
-    @classmethod
-    def get_one_part_bosses(cls):
-        return [
-            cls.ATROPOS_XR,
-            cls.DALTON_PLUS,
-            cls.FLEA,
-            cls.FLEA_PLUS,
-            cls.GOLEM,
-            cls.GOLEM_BOSS,
-            cls.HECKRAN,
-            cls.MASA_MUNE,
-            cls.NIZBEL,
-            cls.NIZBEL_2,
-            cls.RUST_TYRANO,
-            cls.SLASH_SWORD,
-            cls.SUPER_SLASH,
-            cls.YAKRA,
-            cls.YAKRA_XIII
-        ]
-
-    @classmethod
-    def get_two_part_bosses(cls):
-        return [
-            cls.ELDER_SPAWN,
-            cls.GIGA_MUTANT, cls.LAVOS_SPAWN, cls.MEGA_MUTANT,
-            cls.TERRA_MUTANT, cls.ZOMBOR
-        ]
-
-    @classmethod
-    def get_multi_part_bosses(cls):
-        return [
-            cls.SON_OF_SUN, cls.RETINITE,  # cls.MOTHER_BRAIN, cls.GIGA_GAIA
-        ]
+    def inv_str_dict(cls: Type[StrIntEnumT]) -> dict[str, StrIntEnumT]:
+        return dict((str(x), x) for x in cls)
 
 
 class CharID(StrIntEnum):
@@ -244,6 +159,28 @@ class LocID(StrIntEnum):
     PREHISTORIC_CANYON = 0x105
     MYSTIC_MTN_GULCH = 0x112
     LAIR_RUINS_PORTAL = 0x133
+    ARRIS_DOME_FOOD_LOCKER = 0x158
+    ZEAL_PALACE = 0x191
+    ZEAL_TELEPORTERS = 0x185
+    BLACKBIRD_SCAFFOLDING = 0x16A
+    REBORN_EPOCH = 0x179
+    BLACKBIRD_LEFT_WING = 0x16B
+    LAB_32_WEST = 0xDF
+    LAB_32_EAST = 0xE1
+    SUN_KEEP_2300 = 0xFF
+    CHORAS_CARPENTER_600 = 0xBA
+    GUARDIA_BASEMENT = 0x1A
+    KINGS_CHAMBER_600 = 0x79
+    TRUCE_MARKET = 0x11
+    TYRANO_LAIR_KEEP = 0x12D
+    MELCHIORS_KITCHEN = 0x28
+    MILENIAL_FAIR = 0x5
+    OCEAN_PALACE_THRONE = 0x19F
+    BLACK_OMEN_CELESTIAL_GATE = 0x06B
+    HECKRAN_CAVE_ENTRANCE = 0x30
+    HECKRAN_CAVE_UNDERGROUND_RIVER = 0x31
+    MANORIA_HEADQUARTERS = 0x83
+    MANORIA_STORAGE = 0xC9
 
     # Black Omen Panel Flashes
     # BLACK_OMEN_TERRA_MUTANT
@@ -254,7 +191,7 @@ class LocID(StrIntEnum):
     DEATH_PEAK_SOUTH_FACE = 0xF5
     DEATH_PEAK_SOUTHEAST_FACE = 0xF6
     DEATH_PEAK_NORTHEAST_FACE = 0xF7
-    DEATH_PEAK_NORTHWEST_FACE = 0x105
+    DEATH_PEAK_NORTHWEST_FACE = 0x104
     DEATH_PEAK_UPPER_NORTH_FACE = 0x106
     DEATH_PEAK_LOWER_NORTH_FACE = 0x107
     DEATH_PEAK_CAVE = 0x108
@@ -264,6 +201,88 @@ class LocID(StrIntEnum):
     ENDING_SELECTOR = 0x52
     MILLENNIAL_FAIR = 0x05
     ARRIS_DOME_COMMAND = 0xDA
+    REPTITE_LAIR_WEEVIL_BURROW = 0x11D
+
+    # Locs that have Chests
+    TRUCE_MAYOR_1F = 0x0D
+    TRUCE_MAYOR_2F = 0x0E
+    KINGS_CHAMBER_1000 = 0x16
+    QUEENS_ROOM_1000 = 0x17
+    PRISON_TORTURE_STORAGE_ROOM = 0x1E
+    PRISON_CELLS = 0x47  # Guardia Jail
+    PRISON_STAIRWELLS = 0x48
+    ANCIENT_TYRANO_LAIR = 0x6D
+    TRUCE_CANYON = 0x70
+    GUARDIA_KITCHEN_600 = 0x7B
+    MAGUS_CASTLE_DOPPLEGANGER_CORRIDOR = 0x7D
+    MANORIA_MAIN_HALL = 0x82
+    CURSED_WOODS = 0x8C
+    DENADORO_SOUTH_FACE = 0x8E
+    DENADORO_NORTH_FACE = 0x90
+    DENADORO_ENTRANCE = 0x91
+    DENADORO_LOWER_EAST_FACE = 0x92
+    DENADORO_UPPER_EAST_FACE = 0x93
+    SUNKEN_DESERT_PARASITES = 0xA0
+    MAGUS_CASTLE_GUILLOTINES = 0xA7
+    MAGUS_CASTLE_HALL_AGGRESSION = 0xAA
+    MAGUS_CASTLE_HALL_DECEIT = 0xAB
+    MAGUS_CASTLE_OZZIE = 0xAE
+    MAGUS_CASTLE_HALL_APPREHENSION = 0xAF
+    OZZIES_FORT_GUILLOTINE = 0xB3
+    OZZIES_FORT_LAST_STAND = 0xB4
+    GIANTS_CLAW_ENTRANCE_CAVES = 0xC3
+    MANORIA_SHRINE_ANTECHAMBER = 0xC8
+    MANORIA_SHRINE = 0xCB
+    BANGOR_DOME_SEALED_ROOM = 0xD1
+    LAB_16_WEST = 0xD4
+    LAB_16_EAST = 0xD5
+    ARRIS_DOME_INFESTATION = 0xD7
+    REPTITE_LAIR_2F = 0xDE
+    LAB_32 = 0xE0
+    FACTORY_RUINS_AUXILIARY_CONSOLE = 0xE5
+    FACTORY_RUINS_CRANE_ROOM = 0xE7
+    FACTORY_RUINS_CRANE_CONTROL = 0xE9
+    FACTORY_RUINS_INFO_ARCHIVE = 0xEA
+    FACTORY_RUINS_POWER_CORE = 0xEB
+    SEWERS_B1 = 0xEC
+    GENO_DOME_LABS = 0x100
+    GENO_DOME_STORAGE = 0x101
+    GENO_DOME_ROBOT_HUB = 0x102
+    FACTORY_RUINS_DATA_CORE = 0x103
+    FOREST_MAZE = 0x11A
+    REPTITE_LAIR_WEEVIL_BURROWS_B2 = 0x11E
+    REPTITE_LAIR_COMMONS = 0x11F
+    REPTITE_LAIR_TUNNEL = 0x120
+    DACTYL_NEST_LOWER = 0x125
+    GIANTS_CLAW_LAIR_THRONEROOM = 0x129
+    TYRANO_LAIR_THRONEROOM = 0x12C
+    TYRANO_LAIR_STORAGE = 0x12F
+    TYRANO_LAIR_ROOM_OF_VERTIGO = 0x131
+    BLACK_OMEN_47F_AUX_COMMAND = 0x139
+    BLACK_OMEN_47F_GRAND_HALL = 0x13A
+    BLACK_OMEN_47F_EMPORIUM = 0x13B
+    BLACK_OMEN_47F_ROYAL_PATH = 0x13C
+    BLACK_OMEN_47F_ROYAL_BALLROOM = 0x13D
+    BLACK_OMEN_47F_ROYAL_ASSEMBLY = 0x13E
+    BLACK_OMEN_47F_ROYAL_PROMENADE = 0x13F
+    BLACK_OMEN_63F_DIVINE_ESPLANADE = 0x142
+    MT_WOE_WESTERN_FACE = 0x188
+    MT_WOE_LOWER_EASTERN_FACE = 0x189
+    MT_WOE_MIDDLE_EASTERN_FACE = 0x18A
+    MT_WOE_UPPER_EASTERN_FACE = 0x18B
+    OCEAN_PALACE_PIAZZA = 0x195
+    OCEAN_PALACE_SIDE_ROOMS = 0x196
+    OCEAN_PALACE_FORWARD_AREA = 0x197
+    OCEAN_PALACE_SECURITY_ESPLANADE = 0x19D
+    FACTORY_RUINS_ROBOT_STORAGE = 0x1B5
+    GUARDIA_QUEENS_TOWER_600 = 0x1D4
+    MAGUS_CASTLE_CORRIDOR_OF_COMBAT = 0x1D5
+    MAGUS_CASTLE_HALL_OF_AMBUSH = 0x1D6
+    GUARDIA_QUEENS_TOWER_1000 = 0x1E7
+    GUARDIA_LAWGIVERS_TOWER = 0x1E8
+    GUARDIA_PRISON_TOWER = 0x1E9
+    ANCIENT_TYRANO_LAIR_VERTIGO = 0x1EA
+
 
     @classmethod
     def get_boss_locations(cls):
@@ -290,12 +309,13 @@ class LocID(StrIntEnum):
             cls.DEATH_PEAK_GUARDIAN_SPAWN,
             cls.ARRIS_DOME_GUARDIAN_CHAMBER,
             cls.GENO_DOME_MAINFRAME,
-            cls.MT_WOE_SUMMIT
+            cls.MT_WOE_SUMMIT,
+            cls.REBORN_EPOCH
         ]
 
     @classmethod
     def get_one_spot_boss_locations(cls):
-        return[
+        return [
             cls.CAVE_OF_MASAMUNE,
             cls.SUNKEN_DESERT_DEVOURER,
             cls.MAGUS_CASTLE_SLASH,
@@ -315,7 +335,7 @@ class LocID(StrIntEnum):
 
     @classmethod
     def get_two_spot_boss_locations(cls):
-        return[
+        return [
             cls.BLACK_OMEN_ELDER_SPAWN,
             cls.ZENAN_BRIDGE_BOSS,
             cls.BLACK_OMEN_GIGA_MUTANT,
@@ -353,6 +373,10 @@ class ItemID(StrIntEnum):
     SONICARROW = 0x18
     VALKERYE = 0x19
     SIREN = 0x1A
+    OBJ_COUNT = 0x1B
+    UNUSED_1C = 0x1C
+    UNUSED_1D = 0x1D
+    UNUSED_1E = 0x1E
     AIR_GUN = 0x1F
     DART_GUN = 0x20
     AUTO_GUN = 0x21
@@ -364,6 +388,10 @@ class ItemID(StrIntEnum):
     SHOCK_WAVE = 0x27
     WONDERSHOT = 0x28
     GRAEDUS = 0x29
+    UNUSED_2A = 0x2A
+    UNUSED_2B = 0x2B
+    UNUSED_2C = 0x2C
+    UNUSED_2D = 0x2D
     TIN_ARM = 0x2E
     HAMMER_ARM = 0x2F
     MIRAGEHAND = 0x30
@@ -376,6 +404,7 @@ class ItemID(StrIntEnum):
     GIGA_ARM = 0x37
     TERRA_ARM = 0x38
     CRISIS_ARM = 0x39
+    UNUSED_3A = 0x3A
     BRONZEEDGE = 0x3B
     IRON_SWORD = 0x3C
     MASAMUNE_1 = 0x3D
@@ -390,6 +419,8 @@ class ItemID(StrIntEnum):
     FIST_3 = 0x46
     IRON_FIST = 0x47
     BRONZEFIST = 0x48
+    UNUSED_49 = 0x49
+    UNUSED_4A = 0x4A
     DARKSCYTHE = 0x4B
     HURRICANE = 0x4C
     STARSCYTHE = 0x4D
@@ -401,6 +432,11 @@ class ItemID(StrIntEnum):
     SWALLOW = 0x53
     SLASHER_2 = 0x54
     RAINBOW = 0x55
+    UNUSED_56 = 0x56
+    UNUSED_57 = 0x57
+    UNUSED_58 = 0x58
+    UNUSED_59 = 0x59
+    WEAPON_END_5A = 0x5A
     HIDE_TUNIC = 0x5B
     KARATE_GI = 0x5C
     BRONZEMAIL = 0x5D
@@ -433,6 +469,7 @@ class ItemID(StrIntEnum):
     RED_VEST = 0x78
     TABAN_VEST = 0x79
     TABAN_SUIT = 0x7A
+    ARMOR_END_7B = 0x7B
     HIDE_CAP = 0x7C
     BRONZEHELM = 0x7D
     IRON_HELM = 0x7E
@@ -457,6 +494,7 @@ class ItemID(StrIntEnum):
     HASTE_HELM = 0x91
     RBOW_HELM = 0x92
     MERMAIDCAP = 0x93
+    HELM_END_94 = 0x94
     BANDANA = 0x95
     RIBBON = 0x96
     POWERGLOVE = 0x97
@@ -496,6 +534,7 @@ class ItemID(StrIntEnum):
     SERAPHSONG = 0xB9
     SUN_SHADES = 0xBA
     PRISMSPECS = 0xBB
+    ACCESSORY_END_BC = 0xBC
     TONIC = 0xBD
     MID_TONIC = 0xBE
     FULL_TONIC = 0xBF
@@ -541,6 +580,14 @@ class ItemID(StrIntEnum):
     FEATHERS_2 = 0xE7
     BUCKETFRAG = 0xE8
     JETSOFTIME = 0xE9
+    UNUSED_EA = 0xEA
+    UNUSED_EB = 0xEB
+    UNUSED_EC = 0xEC
+    UNUSED_ED = 0xED
+    UNUSED_EE = 0xEE
+    UNUSED_EF = 0xEF
+    UNUSED_F0 = 0xF0
+    UNUSED_F1 = 0xF1
 
     @classmethod
     def get_key_items(cls):
@@ -549,6 +596,7 @@ class ItemID(StrIntEnum):
                 cls.PENDANT, cls.JERKY, cls.MOON_STONE,
                 cls.PRISMSHARD, cls.MASAMUNE_2, cls.CLONE,
                 cls.C_TRIGGER, cls.HERO_MEDAL, cls.ROBORIBBON]
+
 
 # Extracted from Anguirel's Chronosanity code
 # Non-Chronosanity chests checked vs frankin's (?) spreadsheet at
@@ -572,7 +620,8 @@ class TreasureID(StrIntEnum):
     FIONA_KEY = auto()
     ARRIS_DOME_RATS = auto()
     ARRIS_DOME_FOOD_STORE = auto()
-    ARRIS_DOME_KEY = auto()
+    ARRIS_DOME_DOAN_KEY = auto()
+    ARRIS_DOME_FOOD_LOCKER_KEY = auto()
     SUN_PALACE_KEY = auto()
     SEWERS_1 = auto()
     SEWERS_2 = auto()
@@ -649,6 +698,7 @@ class TreasureID(StrIntEnum):
     OZZIES_FORT_GUILLOTINES_4 = auto()
     OZZIES_FORT_FINAL_1 = auto()
     OZZIES_FORT_FINAL_2 = auto()
+    OZZIES_FORT_KEY = auto()
     TRUCE_MAYOR_1F = auto()
     TRUCE_MAYOR_2F = auto()
     FOREST_RUINS = auto()
@@ -891,6 +941,7 @@ class TreasureID(StrIntEnum):
     # Vanilla Rando checks
     BEKKLER_KEY = auto()
     CYRUS_GRAVE_KEY = auto()
+    SUN_KEEP_2300 = auto()
 
     @classmethod
     def get_open_treasures(cls):
@@ -1407,8 +1458,9 @@ class StatusEffect(StrIntEnum):
     POISON = 0x40
     STOP = 0x80
 
-#structure of button bytes at 7e00{f6,f8,fa}, respects player rebound controls
-#order is the order of the array in which the button mappings are stored
+
+# structure of button bytes at 7e00{f6,f8,fa}, respects player rebound controls
+# order is the order of the array in which the button mappings are stored
 class ActionMap(StrIntEnum):
     CONFIRM = 0x80
     CANCEL = 0x08
@@ -1419,7 +1471,9 @@ class ActionMap(StrIntEnum):
     PG_UP = 0x10
     PG_DN = 0x20
 
-#structure of button bytes at 7e00{f0,f2,f4}, does not respect player rebound controls
+
+# structure of button bytes at 7e00{f0,f2,f4}, does not respect player
+# rebound controls
 class InputMap(StrIntEnum):
     A_BUTTON = 0x80
     X_BUTTON = 0x40
@@ -1428,4 +1482,4 @@ class InputMap(StrIntEnum):
     B_BUTTON = 0x08
     Y_BUTTON = 0x04
     SELECT_BUTTON = 0x02
-    #START_BUTTON = 0x01 # Not allowed for rebinding controls
+    # START_BUTTON = 0x01 # Not allowed for rebinding controls

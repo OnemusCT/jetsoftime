@@ -1,7 +1,15 @@
+'''
+Module with classes for manipulating snippets of event scripts.
+'''
 from __future__ import annotations
 from dataclasses import dataclass, replace
+from typing import Optional
 
 from eventcommand import get_command, EventCommand
+
+
+class CommandNotFoundException(Exception):
+    '''Raise when a find_exact_command call fails.'''
 
 
 class EventFunction:
@@ -15,12 +23,12 @@ class EventFunction:
             return EventFunction.JumpRecord(self.from_label, self.to_label)
 
     def __init__(self):
-        self.data = bytearray()
-        self.commands = []
-        self.offsets = []
+        self.data: bytearray = bytearray()
+        self.commands: list[EventCommand] = []
+        self.offsets: list[int] = []
 
-        self.labels = {}
-        self.jumps = []
+        self.labels: dict[str: int] = {}
+        self.jumps: list[EventFunction.JumpRecord] = []
 
         self.pos = 0
 
@@ -29,7 +37,7 @@ class EventFunction:
         ret_ef.data = self.data[:]
         ret_ef.commands = self.commands[:]
         ret_ef.offsets = self.offsets[:]
-        ret_ef.labels = {k: v for k, v in self.labels.items()}
+        ret_ef.labels = dict(self.labels.items())
         ret_ef.jumps = [replace(x) for x in self.jumps]
 
         return ret_ef
@@ -99,7 +107,7 @@ class EventFunction:
             # print(jump)
 
         for ind in sorted(del_inds, reverse=True):
-            del(self.jumps[ind])
+            del self.jumps[ind]
 
     def __shift_labels(self,
                        before_pos: int,
@@ -107,7 +115,7 @@ class EventFunction:
                        shift_magnitude: int):
 
         labels_to_delete = []
-        shifted_label_dict = dict()
+        shifted_label_dict = {}
 
         for label in self.labels:
             if before_pos <= self.labels[label] < after_pos:
@@ -123,14 +131,15 @@ class EventFunction:
                     self.labels[label] = new_pos
 
         for label in labels_to_delete:
-            del(self.labels[label])
+            del self.labels[label]
 
         self.labels.update(shifted_label_dict)
 
     def __get_cmd_index_from_pos(self, pos: int):
         return self.offsets.index(pos)
 
-    def from_bytearray(func_bytes: bytearray):
+    @staticmethod
+    def from_bytearray(func_bytes: bytearray) -> EventFunction:
         ret = EventFunction()
 
         pos = 0
@@ -184,11 +193,15 @@ class EventFunction:
         for i in range(ind+1, len(self.offsets)):
             self.offsets[i] -= cmd_len
 
-        del(self.offsets[ind])
-        del(self.commands[ind])
-        del(self.data[del_pos:del_pos+cmd_len])
+        del self.offsets[ind]
+        del self.commands[ind]
+        del self.data[del_pos:del_pos+cmd_len]
 
         self.pos -= cmd_len
+
+    def insert_at_index(self, event_function: EventFunction, ind: int):
+        pos = self.offsets[ind]
+        self.insert(event_function, pos)
 
     def insert(self, event_function: EventFunction, pos: int):
 
@@ -216,7 +229,8 @@ class EventFunction:
         self.__shift_jumps(pos, pos, len(ins_function))
         self.__shift_labels(pos, pos, len(ins_function))
 
-        self.data[pos:pos] = ins_function.get_bytearray()
+        # self.data[pos:pos] = ins_function.get_bytearray()
+        self.data[pos:pos] = ins_function.data[:]
 
         for i in range(ins_index, len(self.offsets)):
             self.offsets[i] += len(ins_function)
@@ -230,89 +244,6 @@ class EventFunction:
         self.pos += len(ins_function)
 
         return self
-
-        '''
-        print('Warning: This is probably buggy.  Avoid using.')
-        ins_pos = pos
-
-        # find the index of the command where we're inserting
-        # update the offset for commands past the insertion point
-        cur_pos = 0
-        ins_index = None
-        for ind, cmd in enumerate(self.commands):
-            if cur_pos == ins_pos:
-                ins_index = ind
-            elif cur_pos > ins_pos:
-                if ins_index is None:
-                    print('Error: insertion position is not a command start')
-                    quit()
-
-                self.offsets[ind] += ins_index
-
-            cur_pos += len(cmd)
-
-        # We need to fix positional label names.  Store updated labels in
-        # new_labels dict.  Afterwards, we'll update the original dictionary.
-        new_labels = dict()
-
-        # Do jump records first so we can look up the jump position in the
-        # label dict.
-        for jump in self.jumps:
-            if jump.from_index >= ins_index:
-                jump.from_index += ins_index
-                jump.from_pos += ins_pos
-
-            if jump.to_label[0] == '[':
-                orig_pos = self.labels[jump.to_label]
-                if orig_pos >= ins_pos:
-                    new_pos = orig_pos + len(event_function)
-                else:
-                    new_pos = orig_pos
-
-                jump.to_label = f'[{new_pos}]'
-
-        # Now update the labels
-        for label in self.labels:
-            if self.labels[label] >= ins_pos:
-                new_pos = self.labels[label] + len(event_function)
-                if self.labels[0] == '[':
-                    new_label = f'[{new_pos:04X}]'
-                else:
-                    new_label = label
-
-                del(self.labels[label])
-                new_labels[new_label] = new_pos
-
-        # Put the inserted function's labels and jumps in
-        for label in event_function.labels:
-            new_pos = event_function.labels[label] + ins_pos
-
-            if label[0].isalpha():
-                new_label = label
-            else:
-                new_label = f'[{new_pos:04X}]'
-
-            new_labels[new_label] = new_pos
-
-        for jump in event_function.jumps:
-            jump.from_index += ins_index
-            jump.from_pos += ins_pos
-
-            if jump.to_label[0] == '[':
-                old_pos = int(jump.to_label[1:-1])
-                new_pos = old_pos + ins_pos
-                jump.to_label = f'[{new_pos:04X}]'
-            self.jumps.append(jump)
-
-        # Finally copy the data in
-        self.data[ins_pos:ins_pos] = event_function.data[:]
-        self.offsets[ins_index:ins_index] = [
-            x + ins_pos for x in event_function.offsets
-            ]
-
-        # Update the current end position for insertions
-        self.pos += ins_pos
-        '''
 
     def append(self, event_function: EventFunction):
 
@@ -334,12 +265,10 @@ class EventFunction:
                 if event_command.command == cmd.command and \
                    event_command.args[0:-1] == cmd.args[0:-1]:
                     return ind
-                else:
-                    pass
             elif cmd == event_command:
                 return ind
 
-        return None
+        raise CommandNotFoundException
 
     @classmethod
     def if_do(cls, if_command: EventCommand,
@@ -357,7 +286,7 @@ class EventFunction:
                  while_block: EventFunction):
         return EventFunction().add_while(if_command, while_block)
 
-    def __set_label(self, label: str, pos: int = None):
+    def __set_label(self, label: str, pos: Optional[int] = None):
         if label in self.labels and label[0] != '[':
             print(f'Warning: Resetting label {label}.')
 
@@ -366,14 +295,16 @@ class EventFunction:
 
         self.labels[label] = pos
 
-    def __set_pos_label(self, pos: int = None):
+        return self
+
+    def __set_pos_label(self, pos: Optional[int] = None):
         if pos is None:
             pos = self.pos
 
         label = f'[{pos:04X}]'
         self.__set_label(label, pos)
 
-    def __get_label(self, pos: int = None) -> str:
+    def __get_label(self, pos: Optional[int] = None) -> str:
         if pos is None:
             pos = self.pos
 
@@ -381,19 +312,19 @@ class EventFunction:
             label = next(label for label in self.labels
                          if self.labels[label] == pos)
             return label
-        else:
-            label = f'[{pos:04X}]'
-            self.__set_label(label, pos)
-            return label
 
-    def set_label(self, label: str, pos: int = None):
+        label = f'[{pos:04X}]'
+        self.__set_label(label, pos)
+        return label
 
-        if not label[0].isalpha:
-            raise SystemExit(
+    def set_label(self, label: str,
+                  pos: Optional[int] = None) -> EventFunction:
+        if not label[0].isalpha():
+            raise ValueError(
                 'Error: User generated labels must begin with a letter.'
             )
 
-        self.__set_label(label, pos)
+        return self.__set_label(label, pos)
 
     def jump_to_label(self, event_command: EventCommand, label: str):
         jump_cmds = (
@@ -402,8 +333,8 @@ class EventFunction:
         )
 
         if event_command.command not in jump_cmds:
-            raise SystemExit(
-                f'Error: {event_command.cmd:02X} is not a jump command'
+            raise ValueError(
+                f'Error: {event_command.command:02X} is not a jump command'
             )
 
         from_label = self.__get_label()
@@ -424,7 +355,7 @@ class EventFunction:
         )
 
         if from_cmd not in jump_cmds:
-            raise SystemExit(
+            raise ValueError(
                 f'Error: {from_cmd:02X} is not a jump command'
             )
 
@@ -564,9 +495,7 @@ class EventFunction:
         return ret
 
     def resolve_jumps(self):
-
         for jump_record in self.jumps:
-            # print(jump_record)
 
             if jump_record.from_label not in self.labels or \
                jump_record.to_label not in self.labels:
@@ -596,23 +525,28 @@ class EventFunction:
                 print(jump_record)
                 for i, x in enumerate(self.offsets):
                     print(f'[{x:04X}]\t{self.commands[i]}')
-                raise SystemExit('JumpRecord does not point to a jump cmd')
+                raise ValueError('JumpRecord does not point to a jump cmd')
 
             if cmd_id in EventCommand.back_jump_commands and jump_length > 0:
-                raise SystemExit('Back jump jumps to forward label')
+                raise ValueError('Back jump jumps to forward label')
 
             if cmd_id in EventCommand.fwd_jump_commands and jump_length < 0:
-                print('jump error?')
-                # raise SystemExit('Forward jump jumps to backward label')
+                raise ValueError('Forward jump jumps to backward label')
 
             jump_length = abs(jump_length + 1)
             command.args[-1] = jump_length
             try:
+                # print(f'Writing {jump_length:02X} to '
+                #       f'[{from_pos+len(command)-1:04X}]')
+                # print(
+                #     'Current Value:'
+                #     f'{self.data[from_pos+len(command)-1]:02X}'
+                # )
                 self.data[from_pos+len(command)-1] = jump_length
             except IndexError:
                 pass
 
     def get_bytearray(self):
-
+        '''Get this function in a bytearray as it would appear in a script.'''
         self.resolve_jumps()
         return self.data

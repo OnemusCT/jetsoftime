@@ -4,13 +4,16 @@ Experimental module exploring better ways to represent binary data on ROM.
 import abc
 import inspect
 import typing
+from typing import Optional
 
 import byteops
 import ctenums
 import ctrom
 
 ValFilter = typing.Callable[[typing.Any, int], int]
-IntBase = typing.TypeVar('IntBase', bound=int)
+# IntBase = typing.TypeVar('IntBase', bound=typing.Union[bool, int])
+IntBase = typing.Union[typing.Type[int], typing.Type[bool]]
+ByteOrder = typing.Literal['big', 'little']
 
 
 class BytesProp(property):
@@ -19,8 +22,8 @@ class BytesProp(property):
     allows for inspection of these types of properties.
     '''
     def __init__(self, start_idx: int, num_bytes: int = 1,
-                 mask: int = None,
-                 byteorder: str = 'little',
+                 mask: Optional[int] = None,
+                 byteorder: ByteOrder = 'little',
                  ret_type: IntBase = int,
                  input_filter: ValFilter = lambda self, val: val,
                  output_filter: ValFilter = lambda self, val: val):
@@ -61,12 +64,13 @@ class BytesProp(property):
 
     @staticmethod
     def _make_getter(start_idx: int, num_bytes: int, mask: int,
-                     byteorder: str, ret_type: typing.Type,
+                     byteorder: ByteOrder, ret_type: typing.Type,
                      output_filter: ValFilter):
         '''
         Construct the getter function for a BytesProp.
         '''
-        def getter(obj) -> ret_type:
+
+        def getter(obj):
             val = byteops.get_masked_range(obj, start_idx,
                                            num_bytes, mask, byteorder)
             val = output_filter(obj, val)
@@ -76,12 +80,12 @@ class BytesProp(property):
 
     @staticmethod
     def _make_setter(start_idx: int, num_bytes: int, mask: int,
-                     byteorder: str, ret_type: typing.Type,
+                     byteorder: ByteOrder, ret_type: typing.Type,
                      input_filter: ValFilter):
         '''
         Construct the setter function for a BytesProp.
         '''
-        def setter(obj, val: ret_type):
+        def setter(obj, val):
             val = int(val)
             val = input_filter(obj, val)
             byteops.set_masked_range(obj, start_idx, num_bytes,
@@ -103,8 +107,9 @@ class BytesProp(property):
 
 # These two functions exist so the properties can be used indepdendently of the
 # implementation of the byte properties.
-def bytes_prop(start_idx: int, num_bytes: int = 1, mask: int = None,
-               byteorder: str = 'little',
+def bytes_prop(start_idx: int, num_bytes: int = 1,
+               mask: Optional[int] = None,
+               byteorder: ByteOrder = 'little',
                ret_type: IntBase = int,
                input_filter: ValFilter = lambda self, val: val,
                output_filter: ValFilter = lambda self, val: val):
@@ -112,7 +117,9 @@ def bytes_prop(start_idx: int, num_bytes: int = 1, mask: int = None,
                      input_filter, output_filter)
 
 
-def byte_prop(index: int, mask: int = None, byteorder: str = 'little',
+def byte_prop(index: int,
+              mask: Optional[int] = None,
+              byteorder: ByteOrder = 'little',
               ret_type: IntBase = int,
               input_filter: ValFilter = lambda self, val: val,
               output_filter: ValFilter = lambda self, val: val):
@@ -132,12 +139,11 @@ class RomRW(abc.ABC):
     def read_data_from_ctrom(self,
                              ct_rom: ctrom.CTRom,
                              num_bytes: int,
-                             record_num: int = 0) -> bytearray:
+                             record_num: int = 0) -> bytes:
         '''
         Read num_bytes bytes from a ctrom.CTRom.  If the data is arranged in
         records, read record number record_num.
         '''
-        pass
 
     @abc.abstractmethod
     def write_data_to_ct_rom(self,
@@ -145,13 +151,14 @@ class RomRW(abc.ABC):
                              data: bytes,
                              record_num: int = 0):
         '''
-        Write data to a ctrom.CTRom.  If the target data is arranged in 
+        Write data to a ctrom.CTRom.  If the target data is arranged in
         records of length len(data), write to record number record_num.
         '''
         pass
 
     @abc.abstractmethod
-    def free_data_on_ct_rom(self, ct_rom, num_bytes, record_num: int = 0):
+    def free_data_on_ct_rom(self, ct_rom: ctrom.CTRom,
+                            num_bytes: int, record_num: int = 0):
         '''
         Mark the data on the ROM that would be read/written as free
         '''
@@ -175,7 +182,7 @@ class AbsPointerRW(RomRW):
 
     def read_data_from_ctrom(self, ct_rom: ctrom.CTRom,
                              num_bytes: int,
-                             record_num: int = 0) -> bytearray:
+                             record_num: int = 0) -> bytes:
         '''
         Use the absolute pointer on the ROM to read data.
         '''
@@ -239,7 +246,7 @@ class LocalPointerRW(RomRW):
 
     def read_data_from_ctrom(self, ct_rom: ctrom.CTRom,
                              num_bytes: int,
-                             record_num: int = 0) -> bytearray:
+                             record_num: int = 0) -> bytes:
         '''
         Use the bank and offset pointers on the rom to read the data.
         '''
@@ -278,8 +285,8 @@ class BinaryData(bytearray):
     Includes methods for getting/setting bytes with a mask applied which are
     used by BytesProp for generating properties.
     '''
-    SIZE = None
-    ROM_RW: RomRW = None
+    SIZE: typing.Optional[int] = None
+    ROM_RW: typing.Optional[RomRW] = None
 
     @classmethod
     def get_bytesprops(cls):
@@ -304,32 +311,80 @@ class BinaryData(bytearray):
     @classmethod
     def read_from_ctrom(cls: typing.Type[T],
                         ct_rom: ctrom.CTRom,
-                        record_num: int = 0) -> T:
+                        record_num: int = 0,
+                        num_bytes: typing.Optional[int] = None,
+                        rom_rw: typing.Optional[RomRW] = None) -> T:
+        if num_bytes is None:
+            if cls.SIZE is None:
+                raise ValueError("Cannot read with unknown (None) size")
+            num_bytes = cls.SIZE
+
+        if rom_rw is None:
+            if cls.ROM_RW is None:
+                raise ValueError("No RomRW specified.")
+            rom_rw = cls.ROM_RW
+
         return cls(
-            cls.ROM_RW.read_data_from_ctrom(ct_rom, cls.SIZE, record_num)
+            rom_rw.read_data_from_ctrom(ct_rom, num_bytes, record_num)
         )
 
-    def write_to_ctrom(self, ct_rom: ctrom.CTRom, record_num: int = 0):
-        self.ROM_RW.write_data_to_ct_rom(ct_rom, self, record_num)
+    def write_to_ctrom(
+            self, ct_rom: ctrom.CTRom,
+            record_num: int = 0,
+            rom_rw: typing.Optional[RomRW] = None):
 
-    def free_data_on_ct_rom(self, ct_rom: ctrom.CTRom, record_num: int=0):
-        self.ROM_RW.free_data_on_ct_rom(ct_rom, len(self), record_num)
+        if rom_rw is None:
+            if self.ROM_RW is None:
+                raise ValueError("No ROM_RW set")
+            rom_rw = self.ROM_RW
+
+        rom_rw.write_data_to_ct_rom(ct_rom, self, record_num)
+
+    def free_data_on_ct_rom(
+            self, ct_rom: ctrom.CTRom,
+            record_num: int = 0,
+            rom_rw: typing.Optional[RomRW] = None):
+        if rom_rw is None:
+            if self.ROM_RW is None:
+                raise ValueError("No ROM_RW set")
+            rom_rw = self.ROM_RW
+
+        rom_rw.free_data_on_ct_rom(ct_rom, len(self), record_num)
+
+    @classmethod
+    def _get_default_value(cls) -> bytearray:
+        if cls.SIZE is None:
+            return bytearray()
+
+        return bytearray(cls.SIZE)
 
     def __init__(self, *args, **kwargs):
-        bytearray.__init__(self, *args, **kwargs)
+        if not args and not kwargs:
+            init_data = self._get_default_value()
+            bytearray.__init__(self, init_data)
+        else:
+            bytearray.__init__(self, *args, **kwargs)
         self.validate_data(self)
 
     @classmethod
-    def validate_data(cls, data: bytes):
+    def validate_data(cls: typing.Type[T], data: T):
         if data.SIZE is not None and len(data) != cls.SIZE:
             raise ValueError(
                 f'Given data has length {len(data)} (Needs {cls.SIZE}).'
             )
 
+    def get_copy(self: T) -> T:
+        return type(self)(self)
+
     def __str__(self):
         ret_str = f'{self.__class__.__name__}: '
         ret_str += ' '.join(f'{x:02X}' for x in self)
         return ret_str
+
+
+# This is just so that I don't have to check None on everything.
+class SizedBinaryData(BinaryData):
+    SIZE: int = 1
 
 
 class TestBin(BinaryData):

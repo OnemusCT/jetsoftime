@@ -1,20 +1,28 @@
+'''Module to Read and Write Items'''
 from __future__ import annotations
+import functools
+import typing
+from typing import Optional
 
 import byteops
-# import freespace
 import ctenums
 import ctrom
 import ctstrings
 
-import functools
-import typing
+
+WritableBytes = typing.Union[bytearray, memoryview]
 
 
 class DataSizeException(Exception):
-    pass
+    '''Exception to raise when a data record's size is incorrect'''
+
+
+class InvalidItemID(Exception):
+    '''Exception to raise when an item's id does not match the desired type.'''
 
 
 class ArmorEffects(ctenums.StrIntEnum):
+    '''Enum of possible effects that can go on armor/helms.'''
     NONE = 0x00
     SHIELD = 0x17
     ABSORB_LIT_25 = 0x1A
@@ -56,6 +64,7 @@ _armor_status_abbrev_dict: dict[ArmorEffects, str] = {
 
 
 class WeaponEffects(ctenums.StrIntEnum):
+    '''Enum of possible effects that can go on weapons.'''
     NONE = 0x00
     CRIT_X2 = 0x01
     WONDERSHOT = 0x02
@@ -143,6 +152,7 @@ _weapon_effect_abbrev_dict: dict[WeaponEffects, str] = {
 
 
 class StatBit(ctenums.StrIntEnum):
+    '''Associate Stat to bit for StatBoost.'''
     POWER = 0x80
     SPEED = 0x40
     STAMINA = 0x20
@@ -152,11 +162,13 @@ class StatBit(ctenums.StrIntEnum):
     MDEF = 0x02
 
 
+# TODO: Use BinaryData from cttypes
 class BinaryData:
+    '''Class for manipulating rom data.'''
     SIZE = 0
     ROM_START = 0
 
-    def __init__(self, data: bytes = None):
+    def __init__(self, data: typing.Optional[bytes] = None):
         default_data = bytes([0 for i in range(self.SIZE)])
 
         if data is None:
@@ -170,10 +182,13 @@ class BinaryData:
 
         self._data = bytearray(data)
 
-    def __eq__(self, other: BinaryData):
+    def __eq__(self, other: object):
+        if not hasattr(other, '_data'):
+            return False
         return self._data == other._data
 
     def get_copy(self):
+        '''Return a copy of this object.'''
         return self.__class__(self._data)
 
     def __len__(self) -> int:
@@ -186,17 +201,20 @@ class BinaryData:
 
 
 class StatBoost(BinaryData):
+    '''Two byte gear stat boost data.'''
     SIZE = 2
     ROM_START = 0x0C29D7
 
     @classmethod
     def from_rom(cls, rom: bytes, index: int):
+        '''Read StatBoost from a rom.'''
         start = cls.ROM_START + cls.SIZE*index
         end = start + cls.SIZE
 
         return cls(bytes(rom[start:end]))
 
-    def write_to_rom(self, rom: bytearray, index: int):
+    def write_to_rom(self, rom: WritableBytes, index: int):
+        '''Write StatBoost to a rom.'''
         start = self.ROM_START + self.SIZE*index
         end = start + self.SIZE
 
@@ -228,6 +246,7 @@ class StatBoost(BinaryData):
 
     @property
     def magnitude(self):
+        '''The magnitude of the stat boost.'''
         return self._data[1]
 
     @magnitude.setter
@@ -243,6 +262,7 @@ class StatBoost(BinaryData):
 
     @property
     def stats_boosted(self) -> list[StatBit]:
+        '''Which stats are included in the boost.'''
         stat_list = [
             x for x in list(StatBit)
             if int(x) & self._data[0]
@@ -251,6 +271,7 @@ class StatBoost(BinaryData):
         return stat_list
 
     def stat_string(self) -> str:
+        '''Get an abbreviated string representing the StatBoost.'''
         abbrev_dict = {
             StatBit.POWER: 'Pw',
             StatBit.SPEED: 'Sp',
@@ -270,26 +291,36 @@ class StatBoost(BinaryData):
 
 
 class ItemData(BinaryData):
+    '''
+    BinaryData with controls on which ItemIDs are valid for the data.
+
+    Assumes the data exists as fixed-size (SIZE) records with a given start
+    at ROM_START.
+    '''
     SIZE = 0
     ROM_START = 0
     MIN_ID = 0
     MAX_ID = 0
 
     @classmethod
-    def _validate_item_id(cls, item_id: int) -> int:
+    def _validate_item_id(cls, item_id: int) -> ctenums.ItemID:
+        '''Check that item_id matches the class bounds'''
         if item_id > cls.MAX_ID:
-            item_id = cls.MAX_ID
-            print(f'Warning: item_id exceeds {cls.MAX_ID:02X}, '
-                  f'setting to {cls.MAX_ID:02X}')
-        elif item_id < cls.MIN_ID:
-            item_id = cls.MIN_ID
-            print(f'Warning: item_id is less than {cls.MIN_ID:02X}, '
-                  f'setting to {cls.MIN_ID:02X}')
+            raise InvalidItemID(
+                f'{cls.__name__}: item_id 0x{item_id:02X} exceeds '
+                f'MAX=0x{cls.MAX_ID:02X}.'
+            )
+        if item_id < cls.MIN_ID:
+            raise InvalidItemID(
+                f'{cls.__name__}: item_id 0x{item_id:02X} is less than '
+                f'MIN=0x{cls.MIN_ID:02X}.'
+            )
 
-        return item_id
+        return ctenums.ItemID(item_id)
 
     @classmethod
     def from_rom(cls, rom: bytes, item_id: ctenums.ItemID):
+        '''Read ItemData from rom'''
         item_id = cls._validate_item_id(item_id)
 
         shifted_id = item_id - cls.MIN_ID
@@ -298,7 +329,8 @@ class ItemData(BinaryData):
 
         return cls(bytes(rom[start:end]))
 
-    def write_to_rom(self, rom: bytearray, item_id: ctenums.ItemID):
+    def write_to_rom(self, rom: WritableBytes, item_id: ctenums.ItemID):
+        '''Write ItemData to a rom in the given item_id slot.'''
         item_id = self._validate_item_id(item_id)
         shifted_id = item_id - self.MIN_ID
 
@@ -309,7 +341,10 @@ class ItemData(BinaryData):
 
 
 class ItemSecondaryData(ItemData):
-
+    '''
+    Class for storing properties shared by many item types such as price,
+    ability to sell, and ability to equip.
+    '''
     @property
     def price(self) -> int:
         return int.from_bytes(self._data[1:3], 'little')
@@ -319,8 +354,26 @@ class ItemSecondaryData(ItemData):
         self._data[1:3] = val.to_bytes(2, 'little')
 
     @property
+    def is_unsellable(self) -> bool:
+        return bool(self._data[0] & 0x04)
+
+    @is_unsellable.setter
+    def is_unsellable(self, val: bool):
+        self._data[0] &= (0xFF - 0x04)
+        self._data[0] |= (0x04*val)
+
+    @property
+    def is_key_item(self) -> bool:
+        return bool(self._data[0] & 0x08)
+
+    @is_key_item.setter
+    def is_key_item(self, val: bool):
+        self._data[0] &= (0xFF - 0x08)
+        self._data[0] |= (0x08*val)
+
+    @property
     def ngplus_carryover(self) -> bool:
-        return not (self._data[0] & 0x10)
+        return not self._data[0] & 0x10
 
     @ngplus_carryover.setter
     def ngplus_carryover(self, val: bool):
@@ -354,13 +407,15 @@ class ItemSecondaryData(ItemData):
 
 
 class WeaponStats(ItemData):
+    '''Class for weapon stats.  Includes WeaponEffects.'''
     SIZE = 5
     ROM_START = 0x0C0262
     MIN_ID = 0
-    MAX_ID = 0x55
+    MAX_ID = int(ctenums.ItemID.WEAPON_END_5A)-1
 
     @property
     def attack(self) -> int:
+        '''Base attack of the weapon.'''
         return self._data[0]
 
     @attack.setter
@@ -369,6 +424,7 @@ class WeaponStats(ItemData):
 
     @property
     def critical_rate(self) -> int:
+        '''Base critical rate of the weapon.'''
         return self._data[2]
 
     @critical_rate.setter
@@ -382,7 +438,8 @@ class WeaponStats(ItemData):
 
     @property
     def effect_id(self) -> WeaponEffects:
-        return self._data[3]
+        '''The weapon effect on this weapon.'''
+        return WeaponEffects(self._data[3])
 
     @effect_id.setter
     def effect_id(self, val: WeaponEffects):
@@ -391,6 +448,7 @@ class WeaponStats(ItemData):
 
     @property
     def has_effect(self) -> bool:
+        '''Whether the weapon has an effect.'''
         return self._data[4] == 1
 
     @has_effect.setter
@@ -398,20 +456,24 @@ class WeaponStats(ItemData):
         self._data[4] = int(val)
 
     def get_effect_string(self):
+        '''Returns a string representation of this weapon's effect.'''
+
+        # TODO: Move this out of the class?
         if self.has_effect:
             return _weapon_effect_abbrev_dict[self.effect_id]
-        else:
-            return ''
+        return ''
 
 
 class ArmorStats(ItemData):
+    '''Class for stats of armors and helms.'''
     SIZE = 3
     ROM_START = 0x0C047E
-    MIN_ID = 0x5A
-    MAX_ID = 0x93
+    MIN_ID = int(ctenums.ItemID.WEAPON_END_5A)
+    MAX_ID = int(ctenums.ItemID.HELM_END_94)-1
 
     @property
     def defense(self) -> int:
+        '''Base defense value.'''
         return self._data[0]
 
     @defense.setter
@@ -419,16 +481,23 @@ class ArmorStats(ItemData):
         self._data[0] = val
 
     @property
-    def effect_id(self) -> int:
+    def effect_id(self) -> ArmorEffects:
+        '''ArmorEffects of this armor.'''
         return ArmorEffects(self._data[1])
 
     @effect_id.setter
     def effect_id(self, val: ArmorEffects):
         # validate?
+        if val == ArmorEffects.NONE:
+            self.has_effect = False
+        else:
+            self.has_effect = True
+
         self._data[1] = int(val)
 
     @property
     def has_effect(self) -> bool:
+        '''Whether this armor has an effect or not.'''
         return self._data[2] == 1
 
     @has_effect.setter
@@ -436,13 +505,19 @@ class ArmorStats(ItemData):
         self._data[2] = int(val)
 
     def get_effect_string(self):
+        '''Returns a string representation of this armor's effect.'''
         if self.has_effect:
             return _armor_status_abbrev_dict[self.effect_id]
-        else:
-            return ''
+        return ''
 
 
 class Type_09_Buffs(ctenums.StrIntEnum):
+    '''
+    Buffs with a type of 9.  Used by Accessories.
+
+    The type of a buff is an index into the array of stats which indicates
+    the byte to modify.
+    '''
     BERSERK = 0x80
     BARRIER = 0x40
     MP_REGEN = 0x20
@@ -453,6 +528,7 @@ class Type_09_Buffs(ctenums.StrIntEnum):
     UNK_01 = 0x01
 
     def get_abbrev(self) -> str:
+        '''Get an abbreviated string of the buff.  For Item descriptions.'''
         type_09_abbrev: dict[Type_09_Buffs, str] = {
             Type_09_Buffs.BERSERK: 'Bers',
             Type_09_Buffs.BARRIER: 'Bar',
@@ -468,14 +544,31 @@ class Type_09_Buffs(ctenums.StrIntEnum):
 
 
 class Type_05_Buffs(ctenums.StrIntEnum):
+    '''
+    Buffs with a type of 5.  Used by Accessories.  Presently, only the
+    autorevive status (Greendream) uses this type.
+
+    The type of a buff is an index into the array of stats which indicates
+    the byte to modify.
+    '''
+
     GREENDREAM = 0x80
 
     def get_abbrev(self) -> str:
+        '''Get an abbreviated string of the buff.  For Item descriptions.'''
         if self == Type_05_Buffs.GREENDREAM:
             return 'Autorev'
 
+        raise ValueError("Undefined Buff Type")
+
 
 class Type_06_Buffs(ctenums.StrIntEnum):
+    '''
+    Buffs with a type of 6.  Used by Accessories.
+
+    The type of a buff is an index into the array of stats which indicates
+    the byte to modify.
+    '''
     PROT_STOP = 0x80
     PROT_POISON = 0x40
     PROT_SLOW = 0x20
@@ -486,6 +579,7 @@ class Type_06_Buffs(ctenums.StrIntEnum):
     PROT_BLIND = 0x01
 
     def get_abbrev(self) -> str:
+        '''Get an abbreviated string of the buff.  For Item descriptions.'''
         status_abbrev = {
             Type_06_Buffs.PROT_STOP: 'Stp',
             Type_06_Buffs.PROT_POISON: 'Psn',
@@ -501,10 +595,18 @@ class Type_06_Buffs(ctenums.StrIntEnum):
 
 
 class Type_08_Buffs(ctenums.StrIntEnum):
+    '''
+    Buffs with a type of 8.  Used by Accessories.
+
+    The type of a buff is an index into the array of stats which indicates
+    the byte to modify.
+    '''
+
     HASTE = 0x80
     EVADE = 0x40
 
     def get_abbrev(self) -> str:
+        '''Get an abbreviated string of the buff.  For Item descriptions.'''
         type_08_abbrev: dict[Type_08_Buffs, str] = {
             Type_08_Buffs.HASTE: 'Haste',
             Type_08_Buffs.EVADE: '2xEvd'
@@ -513,45 +615,52 @@ class Type_08_Buffs(ctenums.StrIntEnum):
         return type_08_abbrev[self]
 
 
-def get_buff_string(buffs: typing.Union[_Buff,
-                                        typing.Iterable[_Buff]]) -> str:
-    if isinstance(buffs, typing.Iterable):
-        if not buffs:
-            return ''
-        else:
-            buff_types = list(set(type(buff) for buff in buffs))
-            buffs = list(set(buffs))
-
-            if len(buff_types) > 1:
-                raise TypeError('Buff list has multiple types.')
-
-            buff_type = buff_types[0]
-            if buff_type in (Type_05_Buffs, Type_09_Buffs, Type_08_Buffs):
-                buff_str = '/'.join(x.get_abbrev() for x in buffs)
-            elif buff_type == Type_06_Buffs:
-                if len(buffs) == 8:
-                    buff_str = 'P:All'
-                else:
-                    buff_str = 'P:'+'/'.join(x.get_abbrev() for x in buffs)
-
-            return buff_str
-
-
 _Buff = typing.Union[Type_05_Buffs, Type_06_Buffs, Type_08_Buffs,
                      Type_09_Buffs]
 _BuffList = typing.Iterable[_Buff]
 
 
+def get_buff_string(buffs: typing.Union[_Buff, _BuffList]) -> str:
+    '''
+    Return a string representation of the _Buff or _BuffList.  In the case of
+    a _BuffList, all buffs must be of the same type.
+    '''
+    if isinstance(buffs, typing.Iterable):
+        if not buffs:
+            return ''
+
+        buff_types = list(set(type(buff) for buff in buffs))
+        buffs = list(set(buffs))
+
+        if len(buff_types) > 1:
+            raise TypeError('Buff list has multiple types.')
+
+        buff_type = buff_types[0]
+        if buff_type in (Type_05_Buffs, Type_09_Buffs, Type_08_Buffs):
+            buff_str = '/'.join(x.get_abbrev() for x in buffs)
+        elif buff_type == Type_06_Buffs:
+            if len(buffs) == 8:
+                buff_str = 'P:All'
+            else:
+                buff_str = 'P:'+'/'.join(x.get_abbrev() for x in buffs)
+
+        return buff_str
+
+    raise TypeError("Invalid Buff Type")
+
+
 # We are not going to do much with accessories because they are so weird.
 class AccessoryStats(ItemData):
+    '''Class for accessory stats.'''
     SIZE = 4
     ROM_START = 0x0C052C
-    MIN_ID = 0x94
-    MAX_ID = 0xBB
+    MIN_ID = int(ctenums.ItemID.HELM_END_94)
+    MAX_ID = int(ctenums.ItemID.PRISMSPECS)
 
     @property
     def has_battle_buff(self) -> bool:
-        return self._data[1] & 0x80
+        '''whether the accessory has a _Buff.'''
+        return bool(self._data[1] & 0x80)
 
     @has_battle_buff.setter
     def has_battle_buff(self, val: bool):
@@ -559,33 +668,35 @@ class AccessoryStats(ItemData):
         self._data[1] |= (0x80 & (val*0xFF))
 
     def _get_buff_type(self):
+        '''The type of the _Buff.  Only used internally.'''
         if not self.has_battle_buff:
             return None
-        elif self._data[2] == 0x05:
+        if self._data[2] == 0x05:
             return Type_05_Buffs
-        elif self._data[2] == 0x06:
+        if self._data[2] == 0x06:
             return Type_06_Buffs
-        elif self._data[2] == 0x08:
+        if self._data[2] == 0x08:
             return Type_08_Buffs
-        elif self._data[2] == 0x09:
+        if self._data[2] == 0x09:
             return Type_09_Buffs
-        else:
-            raise ValueError('Invalid buff type')
 
-    def _get_buff_type_index(self, buff: _Buff):
+        raise ValueError('Invalid buff type')
+
+    def _get_buff_type_index(self, buff: _Buff) -> int:
+        '''Get offset into stat array for byte modified by the buff.'''
         if isinstance(buff, Type_05_Buffs):
             return 5
-        elif isinstance(buff, Type_06_Buffs):
+        if isinstance(buff, Type_06_Buffs):
             return 6
-        elif isinstance(buff, Type_08_Buffs):
+        if isinstance(buff, Type_08_Buffs):
             return 8
-        elif isinstance(buff, Type_09_Buffs):
+        if isinstance(buff, Type_09_Buffs):
             return 9
-        else:
-            raise ValueError('Invalid buff type')
+        raise ValueError('Invalid buff type')
 
     @property
-    def battle_buffs(self):
+    def battle_buffs(self) -> list[_Buff]:
+        '''List of buffs this accessory has.'''
         BuffType = self._get_buff_type()
         return [x for x in list(BuffType) if self._data[3] & x]
 
@@ -628,7 +739,8 @@ class AccessoryStats(ItemData):
 
     @property
     def has_stat_boost(self) -> bool:
-        return self._data[1] & 0x40
+        '''Whether this accessory has a stat boost.'''
+        return bool(self._data[1] & 0x40)
 
     @has_stat_boost.setter
     def has_stat_boost(self, val: bool):
@@ -639,11 +751,15 @@ class AccessoryStats(ItemData):
 
     @property
     def stat_boost_index(self):
+        '''
+        The index of the stat boost had by this accessory.
+
+        Unsure of behavior if has_stat_boost is False.
+        '''
         if not self.has_stat_boost:
-            # raise exception
+            # raise exception?
             return 0
-        else:
-            return self._data[2]
+        return self._data[2]
 
     @stat_boost_index.setter
     def stat_boost_index(self, val: int):
@@ -655,7 +771,8 @@ class AccessoryStats(ItemData):
 
     @property
     def has_counter_effect(self) -> bool:
-        return self._data[0] & 0x40
+        '''Whether accessory grants a counter effect.'''
+        return bool(self._data[0] & 0x40)
 
     @has_counter_effect.setter
     def has_counter_effect(self, val: bool):
@@ -666,7 +783,8 @@ class AccessoryStats(ItemData):
 
     @property
     def has_normal_counter_mode(self) -> bool:
-        return self.has_counter_effect and self._data[2] & 0x80
+        '''Whether accessory counters with a basic attack.'''
+        return bool(self.has_counter_effect and self._data[2] & 0x80)
 
     # non-normal = atb counter
     @has_normal_counter_mode.setter
@@ -682,33 +800,36 @@ class AccessoryStats(ItemData):
 
     @property
     def counter_rate(self):
+        '''Percentage chance of counter effect triggering.'''
         if self.has_counter_effect:
             return self._data[3]
-        else:
-            # raise exception
-            pass
+
+        raise ValueError("Counter Effect Not Set")
 
     @counter_rate.setter
     def counter_rate(self, val: int):
         if self.has_counter_effect:
             self._data[3] = val
         else:
-            # raise exception
-            pass
+            # raise exception?  Force counter mode on?
+            raise ValueError("Counter Effect Not Set")
 
 
 class AccessorySecondaryStats(ItemSecondaryData):
     SIZE = 4
     ROM_START = 0x0C0A1C
-    MIN_ID = 0x94
-    MAX_ID = 0xBB
+    MIN_ID = int(ctenums.ItemID.HELM_END_94)
+    MAX_ID = int(ctenums.ItemID.PRISMSPECS)
 
 
 class GearSecondaryStats(ItemSecondaryData):
+    '''
+    Class for gear secondary stats. Adds stat boosts and elemental protection.
+    '''
     SIZE = 6
     ROM_START = 0x0C06A4
     MIN_ID = 0
-    MAX_ID = 0x93
+    MAX_ID = int(ctenums.ItemID.MERMAIDCAP)
 
     elem_bit_dict = {
             ctenums.Element.LIGHTNING: 0x80,
@@ -726,6 +847,7 @@ class GearSecondaryStats(ItemSecondaryData):
 
     @property
     def stat_boost_index(self) -> int:
+        '''Index of StatBoost on this item.'''
         return self._data[4]
 
     @stat_boost_index.setter
@@ -734,6 +856,11 @@ class GearSecondaryStats(ItemSecondaryData):
 
     @property
     def elemental_protection_magnitude(self):
+        '''
+        Amount of protection granted by this gear.
+
+        Percent reduction is round(100 - 400/(4+prot_mag)).
+        '''
         return self._data[5] & 0x0F
 
     @elemental_protection_magnitude.setter
@@ -748,10 +875,14 @@ class GearSecondaryStats(ItemSecondaryData):
 
     @classmethod
     def prot_mag_to_percent(cls, prot_mag: int):
+        '''Get the protection magnitude as a percentage reduction.'''
         return round(100 - 400/(4+prot_mag))
 
     def set_protect_element(self, element: ctenums.Element,
                             has_protection: bool):
+        '''
+        Sets the elements that this gear protects against.
+        '''
         if element == ctenums.Element.NONELEMENTAL:
             print('Warning: Gear cannot protect against nonelemental.')
             return
@@ -766,6 +897,10 @@ class GearSecondaryStats(ItemSecondaryData):
             self._data[5] &= bit_mask
 
     def get_protection_desc_str(self) -> str:
+        '''
+        Gets a string representation of this gear's elemental protection.
+        For descriptions.
+        '''
         mag = self.prot_mag_to_percent(self.elemental_protection_magnitude)
         elems = self.get_protected_elements()
 
@@ -774,11 +909,13 @@ class GearSecondaryStats(ItemSecondaryData):
 
         if mag == 0 or not elems:
             return ''
-        else:
-            return f'R:{elem_str} {mag}%'
+
+        return f'R:{elem_str} {mag}%'
 
     def get_protected_elements(self) -> list[ctenums.Element]:
-
+        '''
+        Gets the elements that this gear protects against.
+        '''
         elements = [
             elem for elem in self.elem_bit_dict
             if self.elem_bit_dict[elem] & self._data[5]
@@ -787,7 +924,9 @@ class GearSecondaryStats(ItemSecondaryData):
         return elements
 
     def get_stat_string(self):
-
+        '''
+        Gets a string representing these stats.  For spoilers/testing.
+        '''
         price_str = f'Price: {self.price}'
         equip_str = 'Equppable by: ' \
             + ', '.join(str(x) for x in self.get_equipable_by())
@@ -803,39 +942,45 @@ class GearSecondaryStats(ItemSecondaryData):
 
 
 class ConsumableKeySecondaryStats(ItemSecondaryData):
+    '''Class for Consumable and Key Item Stats.'''
     SIZE = 3
     ROM_START = 0x0C0ABC
     MIN_ID = 0xBC
     MAX_ID = 0xF1
 
-    @property
     def get_equipable_by(self):
-        # raise exception
-        pass
+        raise TypeError("Consumables are not Equippable")
 
-    @get_equipable_by.setter
-    def get_equipable_by(self, val):
-        # raise exception
-        pass
+    def set_equipable_by(self, chars):
+        raise TypeError("Consumables are not Equippable")
 
 
 class ConsumableKeyEffect(ItemData):
+    '''
+    Class for Consumable and Key Item Effects.
+    '''
     SIZE = 4
     ROM_START = 0x0C05CC
-    MIN_ID = 0xBC
+    MIN_ID = int(ctenums.ItemID.ACCESSORY_END_BC)
     MAX_ID = 0xF1
 
     @property
     def heals_in_menu(self):
+        '''Can the item be used to heal in the menu.'''
         return self._data[0] == 0x80
 
     @heals_in_menu.setter
     def heals_in_menu(self, val: bool):
         self._data[0] &= 0x7F
         self._data[0] |= (0x80 * val)
-    
+
     @property
     def heals_in_battle_only(self):
+        '''
+        Whether the item can only be used to heal in battle.
+
+        I believe this is only for revives.
+        '''
         return self._data[0] == 0x04
 
     @heals_in_battle_only.setter
@@ -846,6 +991,7 @@ class ConsumableKeyEffect(ItemData):
 
     @property
     def heals_at_save(self):
+        '''Whether the item can only be used at save points.'''
         return self._data[0] == 0x08
 
     @heals_at_save.setter
@@ -857,6 +1003,11 @@ class ConsumableKeyEffect(ItemData):
 
     @property
     def base_healing(self) -> int:
+        '''
+        Base healing.  Healing is base*multiplier.
+
+        Warning:  Things are different between menu and battle.
+        '''
         return self._data[3] & 0x3F
 
     @base_healing.setter
@@ -867,6 +1018,11 @@ class ConsumableKeyEffect(ItemData):
 
     @property
     def heal_multiplier(self) -> int:
+        '''
+        Healing Multiplier.  Healing is base*multiplier.
+
+        Warning:  Things are different between menu and battle.
+        '''
         return self._data[2] & 0x0F
 
     @heal_multiplier.setter
@@ -877,6 +1033,7 @@ class ConsumableKeyEffect(ItemData):
 
     @property
     def heals_hp(self) -> bool:
+        '''Whether this item heals hp.'''
         return bool(self._data[1] & 0x80)
 
     @heals_hp.setter
@@ -888,6 +1045,7 @@ class ConsumableKeyEffect(ItemData):
 
     @property
     def heals_mp(self) -> bool:
+        '''Whether this item heals mp.'''
         return bool(self._data[1] & 0x40)
 
     @heals_mp.setter
@@ -897,17 +1055,18 @@ class ConsumableKeyEffect(ItemData):
         else:
             self._data[1] &= 0xBF
 
-    def get_heal_amount(self):
+    def get_heal_amount(self) -> int:
+        '''The total healing amount.  Base*Multiplier.'''
         return self.base_healing*self.heal_multiplier
 
 
-Stats = typing.TypeVar('Stats',
-                       WeaponStats, ArmorStats,
-                       AccessoryStats, ConsumableKeyEffect)
+Stats = typing.Union[
+    WeaponStats, ArmorStats, AccessoryStats, ConsumableKeyEffect
+]
 
-SecStats = typing.TypeVar('SecStats',
-                          GearSecondaryStats, AccessorySecondaryStats,
-                          ConsumableKeySecondaryStats)
+SecStats = typing.Union[
+    GearSecondaryStats, AccessorySecondaryStats, ConsumableKeySecondaryStats
+]
 
 
 class Item:
@@ -924,7 +1083,7 @@ class Item:
         self.name = bytearray(name_bytes)
         self.desc = bytearray(desc_bytes)
 
-    def _jot_json(self):
+    def to_jot_json(self):
         return {
             'name': self.get_name_as_str(True),
             'desc': self.get_desc_as_str(),
@@ -959,31 +1118,40 @@ class Item:
     def get_stat_boost_ind(self):
         if isinstance(self.secondary_stats, GearSecondaryStats):
             return self.secondary_stats.stat_boost_index
-        elif isinstance(self.stats, AccessoryStats):
+        if isinstance(self.stats, AccessoryStats):
             if self.stats.has_stat_boost:
                 return self.stats.stat_boost_index
-            else:
-                return None
-        else:
             return None
+        return None
 
     @classmethod
     def _determine_types(
             cls,
-            item_id: ctenums.ItemID) -> typing.Tuple[Stats, SecStats]:
-        stat_types = (WeaponStats, ArmorStats, AccessoryStats,
-                      ConsumableKeyEffect)
-        secondary_types = (GearSecondaryStats, AccessorySecondaryStats,
-                           ConsumableKeySecondaryStats)
+            item_id: ctenums.ItemID
+    ) -> typing.Tuple[typing.Type[Stats], typing.Type[SecStats]]:
+
+        S = typing.Type[Stats]
+        stat_types: typing.Tuple[S, S, S, S] = (
+            WeaponStats, ArmorStats, AccessoryStats, ConsumableKeyEffect
+        )
+
+        SS = typing.Type[SecStats]
+        secondary_types: typing.Tuple[SS, SS, SS] = (
+            GearSecondaryStats, AccessorySecondaryStats,
+            ConsumableKeySecondaryStats
+        )
+
+        primary_stat_type: S
+        secondary_stat_type: SS
 
         for stat_type in stat_types:
             if stat_type.MIN_ID <= item_id <= stat_type.MAX_ID:
                 primary_stat_type = stat_type
                 break
 
-        for stat_type in secondary_types:
-            if stat_type.MIN_ID <= item_id <= stat_type.MAX_ID:
-                secondary_stat_type = stat_type
+        for sec_stat_type in secondary_types:
+            if sec_stat_type.MIN_ID <= item_id <= sec_stat_type.MAX_ID:
+                secondary_stat_type = sec_stat_type
                 break
 
         return primary_stat_type, secondary_stat_type
@@ -998,7 +1166,7 @@ class Item:
         name_b = bytes(rom[name_st:name_end])
         return name_b
 
-    def write_name_to_rom(self, rom: bytearray, item_id: ctenums.ItemID):
+    def write_name_to_rom(self, rom: WritableBytes, item_id: ctenums.ItemID):
         names_start_addr = 0x0C0B5E
         name_size = 0xB
         name_st = names_start_addr + item_id*name_size
@@ -1083,9 +1251,14 @@ class Item:
 
 class ItemDB:
     def __init__(self,
-                 item_dict: dict[ctenums.ItemID, Item],
-                 stat_boosts: typing.Iterable[StatBoost]):
+                 item_dict: Optional[dict[ctenums.ItemID, Item]] = None,
+                 stat_boosts: Optional[typing.Iterable[StatBoost]] = None):
+        if item_dict is None:
+            item_dict = {}
         self.item_dict = dict(item_dict)
+
+        if stat_boosts is None:
+            stat_boosts = []
         self.stat_boosts = list(stat_boosts)
 
     def __getitem__(self, index):
@@ -1308,12 +1481,15 @@ class ItemDB:
 
         # fs = freespace.FreeSpace(0x600000, True)
 
-        for item_id in range(0xF2):
-            ptr_st = desc_ptr_st + 2*item_id
+        for item_index in range(0xF2):
+            ptr_st = desc_ptr_st + 2*item_index
             ptr = int.from_bytes(rom[ptr_st:ptr_st+2], 'little')
 
             desc_st = bank + ptr
-            desc_len = len(Item.get_desc_from_rom(rom, item_id))
+            desc_len = len(
+                Item.get_desc_from_rom(rom, ctenums.ItemID(item_index))
+            )
+
             desc_end = desc_st + desc_len
             lower_bound = min(lower_bound, desc_st)
             upper_bound = max(upper_bound, desc_end)
@@ -1321,7 +1497,7 @@ class ItemDB:
             # used = freespace.FSWriteType.MARK_USED
             # fs.mark_block((desc_st, desc_end), used)
 
-        del(rom)  # Have to delete reference to MemoryView for other writes
+        del rom  # Have to delete reference to MemoryView for other writes
 
         desc_ptr_space = 0xF2*2
         desc_space = sum(len(self.item_dict[x].desc)
@@ -1378,5 +1554,5 @@ class ItemDB:
 
         # fs.print_blocks()
 
-    def _jot_json(self):
+    def to_jot_json(self):
         return {str(x): self.item_dict[x] for x in self.item_dict}
