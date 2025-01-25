@@ -80,6 +80,8 @@ from editorui.menus.PartyManagementMenu import PartyManagementMenu
 from editorui.menus.VectorMoveFromMemMenu import VectorMoveFromMemMenu
 from editorui.menus.SetSpeedFromMemMenu import SetSpeedFromMemMenu
 from editorui.menus.ChangeLocationFromMemMenu import ChangeLocationFromMemMenu
+from editorui.menus.JumpMenu import JumpMenu
+from editorui.menus.Jump7BMenu import Jump7BMenu
 
 menu_mapping = {
     EventCommandType.UNASSIGNED: {
@@ -216,8 +218,8 @@ menu_mapping = {
     EventCommandType.SPRITE_MOVEMENT: {
         EventCommandSubtype.CONTROLLABLE: ControllableMenu(),
         EventCommandSubtype.EXPLORE_MODE: ExploreModeMenu(),
-        # EventCommandSubtype.JUMP:
-        # EventCommandSubtype.JUMP_7B:
+        EventCommandSubtype.JUMP: JumpMenu(),
+        EventCommandSubtype.JUMP_7B: Jump7BMenu(),
         EventCommandSubtype.MOVE_PARTY: MovePartyMenu(),
         EventCommandSubtype.MOVE_SPRITE: MoveSpriteMenu(),
         EventCommandSubtype.MOVE_SPRITE_FROM_MEM: MoveSpriteFromMemMenu(),

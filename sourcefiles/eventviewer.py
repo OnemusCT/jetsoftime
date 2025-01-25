@@ -113,7 +113,15 @@ class EventViewer(QMainWindow):
 
     def on_save(self):
         """Handle Save menu action"""
-        
+        self.state.ct_rom.script_manager.write_script_to_rom(self.location_selector.currentData())
+        is_match, discrepancies = self.compare_tree_with_script()
+        if not is_match:
+            print("Tree discrepancies found:")
+            for d in discrepancies:
+                print(f"- {d}")
+            print("Save cancelled")
+            return
+        self.state.file.write_bytes(self.state.ct_rom.rom_data.getvalue())
 
 
     def on_save_as(self):
@@ -125,10 +133,7 @@ class EventViewer(QMainWindow):
             "SNES ROM Files (*.smc *.sfc);;All Files (*.*)"
         )
         if filename:
-            print("{:02X}".format(self.location_selector.currentData()))
-            #self.state.ct_rom.script_manager.set_script(self.state.script, self.location_selector.currentData())
             self.state.ct_rom.script_manager.write_script_to_rom(self.location_selector.currentData())
-            self.state.ct_rom.rom_data.getvalue()
             is_match, discrepancies = self.compare_tree_with_script()
             if not is_match:
                 print("Tree discrepancies found:")
@@ -142,12 +147,7 @@ class EventViewer(QMainWindow):
 
     def on_copy(self):
         """Handle Copy menu action"""
-        is_match, discrepancies = self.compare_tree_with_script()
-        if not is_match:
-            print("Tree discrepancies found:")
-            for d in discrepancies:
-                print(f"- {d}")
-            print("DONE!\n\n\n")
+        pass
 
     def on_paste(self):
         """Handle Paste menu action"""
@@ -419,10 +419,6 @@ class EventViewer(QMainWindow):
                 self.update_command_menu(menu)
                 self.command_menu.apply_arguments(item.command.command, item.command.args)
 
-    # def load_initial_script(self):
-    #     """Load the initial script data"""
-    #     self.update_command_tree(process_script(self.state.script))
-    #     self.tree.expandAll()
 
     @pyqtSlot(int)
     def on_location_changed(self, index: int):
@@ -441,19 +437,22 @@ class EventViewer(QMainWindow):
     @pyqtSlot()
     def on_update_command(self):
         """Handle command updates"""
-        new_command = self.command_menu.get_command()
-        if new_command.command == 0x1:
-            return
-            
-        current_item = self.tree.currentIndex().internalPointer()
-        self.model.update_command(current_item, new_command)
-        self.tree.viewport().update()
+        try:
+            new_command = self.command_menu.get_command()
+            if new_command.command == 0x1:
+                return
+                
+            current_item = self.tree.currentIndex().internalPointer()
+            self.model.update_command(current_item, new_command)
+            self.tree.viewport().update()
 
-        is_match, discrepancies = self.compare_tree_with_script()
-        if not is_match:
-            print("Tree discrepancies found:")
-            for d in discrepancies:
-                print(f"- {d}")
+            is_match, discrepancies = self.compare_tree_with_script()
+            if not is_match:
+                print("Tree discrepancies found:")
+                for d in discrepancies:
+                    print(f"- {d}")
+        except Exception as e:
+            print(e)
 
     @pyqtSlot(int)
     def on_command_group_changed(self, index: int):
@@ -584,16 +583,32 @@ class EventViewer(QMainWindow):
         return is_match, discrepancies
 
 def main():
-    app = QApplication(sys.argv)
-    parser = arguments.get_parser()
-    args = parser.parse_args()
-    
-    if not args.input_file.exists():
-        raise FileNotFoundError("Invalid input file path.")
-        
-    window = EventViewer(args.input_file)
-    window.show()
-    app.exec()
+   app = QApplication(sys.argv)
+   
+   input_file = None
+   if len(sys.argv) > 1 and sys.argv[1] == "--input-file":
+       if len(sys.argv) != 3:
+           print("Usage: eventviewer.py --input-file <rom_path>")
+           sys.exit(1)
+       input_file = Path(sys.argv[2])
+   else:
+       filename, _ = QFileDialog.getOpenFileName(
+           None, 
+           "Open ROM File",
+           "",
+           "SNES ROM Files (*.smc *.sfc);;All Files (*.*)"
+       )
+       if filename:
+           input_file = Path(filename) 
+       else:
+           sys.exit()
+
+   if not input_file.exists():
+       raise FileNotFoundError("Invalid input file path.")
+
+   window = EventViewer(input_file)
+   window.show()
+   app.exec()
 
 if __name__ == "__main__":
     main()
