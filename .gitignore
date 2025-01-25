@@ -5,3 +5,7 @@ sourcefiles/locations.txt
 sourcefiles/mem_location_parser.py
 sourcefiles/Memory Locations.txt
 *.smc
+dist/
+build/
+*.egg-info/
+env/
