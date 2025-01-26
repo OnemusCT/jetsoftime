@@ -10,7 +10,7 @@ env\Scripts\activate     # Windows
 
 pip install .
 
-python -m sourcefiles.eventviewer
+python -m sourcefiles.temporalredux
 ```
 
 Requires Python 3.7+ and PyQt6.

@@ -12,8 +12,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot
 
 import ctevent
-from freespace import FSRom
-import editorui.commandtotext as c2t
 from eventcommand import EventCommand, event_commands
 from editorui.commandgroups import event_command_groupings, EventCommandType, EventCommandSubtype
 import editorui.commandmenus as cm
