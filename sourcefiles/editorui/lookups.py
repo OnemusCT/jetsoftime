@@ -1101,7 +1101,6 @@ known_mem_locations = {
     0x7F01EF: "CharacterLock",
     0x7F01FC: "LastBattleStatus",
     0x7F01FD: "KeepCurSong",
-    #0x7F0210: "Item",
     0x7E0100: "CurrLocation",
     0x7E0102: "Starting X Coord",
     0x7E0103: "Starting Y Coord",
@@ -1266,12 +1265,8 @@ known_mem_locations = {
     0x7F01ED: "Keep Current Song flag - 00 off, 01 on",
     0x7F01F0: "Location storyline flags",
     0x7F01F7: "Black Omen has appeared",
-    0x7F0200: "Index for Item text control code",
-    0x7F0400: "Event Data",
     0x7F0A80: "Event result byte",
     0x7F0B00: "Byte 1: Unknown, Byte 2: Object animation loops left (Event Command B7)",
-    0x7F2000: "Event Data",
-    0x7F8000: "Decompressed NPC and enemy graphics",
 }
 
 items = {

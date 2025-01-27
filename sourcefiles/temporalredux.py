@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import ByteString, Optional
 from dataclasses import dataclass
 import sys 
-import cli.arguments as arguments
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, 
     QComboBox, QPushButton, QLabel, QGridLayout,
@@ -11,14 +10,14 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 
+from base import basepatch
+from ctrom import CTRom
 import ctevent
 from eventcommand import EventCommand, event_commands
 from editorui.commandgroups import event_command_groupings, EventCommandType, EventCommandSubtype
 import editorui.commandmenus as cm
 from editorui.commanditemmodel import CommandModel
 from editorui.commandtreeview import CommandTreeView
-from base import basepatch
-from ctrom import CTRom
 from editorui.commanditem import CommandItem, process_script
 from editorui.lookups import locations
 from editorui.menus.BaseCommandMenu import BaseCommandMenu

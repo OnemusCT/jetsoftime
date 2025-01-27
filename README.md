@@ -15,6 +15,14 @@ python -m sourcefiles.temporalredux
 
 Requires Python 3.7+ and PyQt6.
 
+## Known Issues
+1. Strings can't be edited
+1. Conditionals menus accept a number of bytes to jump, this should be inferred instead
+1. Menus not implemented: Mode7, Draw Geometery, Color Math, Copy Tiles, Scroll Layers (both versions), Sound, Wait for Silence, Color Crash
+1. Sometimes crashes happen when editing the same command twice, or the subcommand menu won't change
+
+In addition to these known issues there has not been extensive testing of the various commands and their menus.
+
 ## Jets of Time
 Jets of Time is the open world Chrono Trigger randomizer that Temporal Redux is based on.
 
